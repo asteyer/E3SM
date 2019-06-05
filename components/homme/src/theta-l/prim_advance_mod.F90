@@ -2191,6 +2191,7 @@ contains
   real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
   real (kind=real_kind), pointer, dimension(:,:,:)   :: vtheta_dp
   real (kind=real_kind), pointer, dimension(:,:)   :: phis
+  real (kind=real_kind), dimension(:,:), allocatable :: myJac, myexpJac
   real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
   real (kind=real_kind) :: JacU(nlev-1,np,np), JacU2(nlev-2,np,np)
   real (kind=real_kind) :: pnh(np,np,nlev)     ! nh (nonydro) pressure
@@ -2344,9 +2345,113 @@ contains
   itertol=itererrmax
   call t_stopf('compute_stage_value_dirk')
 
+
+
+
+  ! debug/test matrix_exponential subroutine
+  allocate(myJac(2,2))  
+  myJac(1,1) = -49.d0
+  myJac(2,1) = -64.d0
+  myJac(1,2) = 24.d0
+  myJac(2,2) = 31.d0
+  k = 1
+
+  call matrix_exponential(myJac,dble(k), myexpJac)
+  print *, "********************************************"
+  print *, myexpJac(1,1), myexpJac(1,2)
+  print *, myexpJac(2,1), myexpJac(2,2)
+  print *, "********************************************"
+  
+
   end subroutine compute_stage_value_dirk
 
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine matrix_exponential(myJac, dt, expJdt)
+  real*8, intent(in) :: dt
+  real (kind=real_kind), dimension(:,:), intent(in) :: myJac
+  real (kind=real_kind), dimension(:,:), allocatable, intent(out), target :: expJdt
+ 
+  ! local
+  real (kind=real_kind), allocatable, dimension(:,:) :: N, D, Aj, negAj, Jac,&
+    Dinv
+  real (kind=real_kind), allocatable, dimension(:) :: work
+  integer, allocatable, dimension(:) :: ipiv
+  real (kind=real_kind) normJ, pfac, fac
+  integer, dimension(2) :: dimJac
+  integer i,p,info, maxiter, k
 
+ 
+  p = 10                  ! parameter used in diagonal Pade approximation
+  pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
+  ! Initialize random A and normalize
+!  print *, "shape of input Jac is", shape(myJac)
+  dimJac = shape(myJac)
+  allocate(Jac(dimJac(1), dimJac(2)))
+  Jac = myJac*dt
 
+  ! Scaling by power of 2
+  maxiter = 10000
+  k = 0
+  do while((norm2(Jac)>1.d0).and.(k<maxiter))
+    Jac = Jac / 2.d0
+    k = k + 1
+  end do ! end while loop
+
+  ! Initialize Aj,negAj = identity and N,D = 0.
+  allocate(N(dimJac(1), dimJac(2)))
+  N = 0.d0
+  allocate(D(dimJac(1), dimJac(2)))
+  D = 0.d0
+  allocate(Aj(dimJac(1), dimJac(2)))
+  Aj = 0.d0
+  allocate(negAj(dimJac(1), dimJac(2)))
+  negAj = 0.d0
+  allocate(Dinv(dimJac(1), dimJac(2)))
+  Dinv = 0.d0
+  allocate(expJdt(dimJac(1), dimJac(2)))
+  expJdt = 0.d0
+
+  allocate(work(dimJac(1)))
+  work = 0.d0
+  allocate(ipiv(dimJac(1)))
+  ipiv = 0
+
+  do i = 1,dimJac(1)
+    Aj(i,i) = 1.d0
+    negAj(i,i) = 1.d0
+  enddo ! end do loop
+
+  ! series for Pade approximation
+  do i=0,p
+    ! the gamma function provides some roundoff. We should use a look-up table
+    ! instead 
+    fac = gamma(dble(2*p-i+1))/(gamma(dble(i+1))*gamma(dble(p-i+1)))*pfac
+!    print *, "********** (i + 1) = ", dble(i+1)
+!    print *, "********** gamma(i+1) = ", dgamma(dble(i+1))
+    D = D + fac*negAj
+    N = N + fac*Aj
+    negAj = matmul(negAj,(-1.d0)*Jac)
+    Aj = matmul(Aj,Jac)
+  enddo ! end do loop for Pade approx
+
+  ! Invert matrix D
+  Dinv = D
+  call DGETRF(dimJac(1), dimJac(2), Dinv, dimJac(1), ipiv, info)
+  if (info /= 0) then
+    stop 'Matrix is numerically singular!'
+  end if
+  call DGETRI(dimJac(2), Dinv, dimJac(2), ipiv, work, dimJac(2), info)
+  if (info /= 0) then
+    stop 'Matrix inversion failed!'
+  end if
+
+  expJdt = matmul(Dinv, N)
+
+  ! Squaring
+  do i=1,k
+    expJdt = matmul(expJdt, expJdt)
+  end do
+
+  end subroutine matrix_exponential
 
 end module prim_advance_mod
