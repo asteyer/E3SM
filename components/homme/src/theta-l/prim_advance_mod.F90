@@ -2381,7 +2381,7 @@ contains
   integer i,p,info, maxiter, k
 
  
-  p = 10                  ! parameter used in diagonal Pade approximation
+  p = 26            ! parameter used in diagonal Pade approximation
   pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
   ! Initialize random A and normalize
 !  print *, "shape of input Jac is", shape(myJac)
@@ -2392,7 +2392,7 @@ contains
   ! Scaling by power of 2
   maxiter = 10000
   k = 0
-  do while((norm2(Jac)>1.d0).and.(k<maxiter))
+  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
     Jac = Jac / 2.d0
     k = k + 1
   end do ! end while loop
