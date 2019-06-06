@@ -50,7 +50,7 @@ module prim_advance_mod
   private
   save
   public :: prim_advance_exp, prim_advance_init1, &
-       applycamforcing_dynamics, compute_andor_apply_rhs
+       applycamforcing_dynamics, compute_andor_apply_rhs, matrix_exponential
 
 contains
 
@@ -2191,7 +2191,6 @@ contains
   real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
   real (kind=real_kind), pointer, dimension(:,:,:)   :: vtheta_dp
   real (kind=real_kind), pointer, dimension(:,:)   :: phis
-  real (kind=real_kind), dimension(:,:), allocatable :: myJac, myexpJac
   real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
   real (kind=real_kind) :: JacU(nlev-1,np,np), JacU2(nlev-2,np,np)
   real (kind=real_kind) :: pnh(np,np,nlev)     ! nh (nonydro) pressure
@@ -2345,23 +2344,6 @@ contains
   itertol=itererrmax
   call t_stopf('compute_stage_value_dirk')
 
-
-
-
-  ! debug/test matrix_exponential subroutine
-  allocate(myJac(2,2))  
-  myJac(1,1) = -49.d0
-  myJac(2,1) = -64.d0
-  myJac(1,2) = 24.d0
-  myJac(2,2) = 31.d0
-  k = 1
-
-  call matrix_exponential(myJac,dble(k), myexpJac)
-  print *, "********************************************"
-  print *, myexpJac(1,1), myexpJac(1,2)
-  print *, myexpJac(2,1), myexpJac(2,2)
-  print *, "********************************************"
-  
 
   end subroutine compute_stage_value_dirk
 

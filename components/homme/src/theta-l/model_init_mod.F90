@@ -19,6 +19,7 @@ module model_init_mod
   use hybrid_mod,         only: hybrid_t
   use dimensions_mod,     only: np,nlev,nlevp
   use eos          ,      only: pnh_and_exner_from_eos,get_dirk_jacobian
+  use prim_advance_mod,   only: matrix_exponential
   use element_state,      only: timelevels, nu_scale_top
   use viscosity_mod,      only: make_c0_vector
   use kinds,              only: real_kind,iulog
@@ -69,7 +70,8 @@ contains
     if (.not. theta_hydrostatic_mode) &
          call test_imex_jacobian(elem,hybrid,hvcoord,tl,nets,nete)
 
-
+    ! unit test for matrix exponential
+    call test_matrix_exponential(hybrid)
 
     ! 
     ! compute scaling of sponge layer damping 
@@ -213,7 +215,77 @@ contains
           'PASS. max error of analytic and exact Jacobian: ',minjacerr
   end if
 
-end subroutine test_imex_jacobian
+  end subroutine test_imex_jacobian
+
+
+  subroutine test_matrix_exponential(hybrid)
+
+  type(hybrid_t)    , intent(in) :: hybrid
+
+  ! local
+  real (kind=real_kind), dimension(:,:), allocatable :: myJac, myexpJac, &
+    exactExp, factor, factorInv
+  real (kind=real_kind), dimension(:), allocatable :: work
+  integer, dimension(2) :: ipiv
+  real (kind = real_kind) :: error, dt
+  integer :: n, info
+
+  if (hybrid%masterthread) write(iulog,*)'Running matrix exponential unit test...'
+  allocate(myJac(2,2))  
+  myJac(1,1) = -49.d0
+  myJac(2,1) = -64.d0
+  myJac(1,2) = 24.d0
+  myJac(2,2) = 31.d0
+  dt = 1.d0
+  ! Rational approximation
+  call matrix_exponential(myJac, dt, myexpJac)
+  
+  allocate(exactExp(2,2))
+  exactExp = 0.d0
+  exactExp(1,1) = dexp(-1.d0)
+  exactExp(2,2) = dexp(-17.d0)
+
+  allocate(factor(2,2))
+  factor(1,1) = 1.d0
+  factor(1,2) = 3.d0
+  factor(2,1) = 2.d0
+  factor(2,2) = 4.d0
+  ! Actual analytic exponential
+  exactExp = matmul(factor,exactExp)
+
+  allocate(factorInv(2,2))
+  factorInv = factor
+  allocate(work(2))
+  work = 0.d0
+  ipiv = 0
+  n = 2
+
+  call DGETRF(n,n,factorInv,n,ipiv,info)
+  if (info /= 0) then
+    stop 'Matrix is numerically singular!'
+  end if
+
+  call DGETRI(n,factorInv,n,ipiv,work,n,info)
+  if (info /= 0) then
+    stop 'Matrix inversion failed!'
+  end if
+
+  exactExp = matmul(exactExp, factorInv)  
+  error = norm2(exactExp - myexpJac)
+ 
+ if (error > 1e-3) then 
+     write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
+     write(iulog,*)'Please check that the exact matrix exponential in eos.F90 is actually exact'
+  else
+     if (hybrid%masterthread) write(iulog,*)&
+          'PASS. max error of analytic and exact matrix exponential: ', error
+  end if
+
+
+
+
+
+  end subroutine test_matrix_exponential
 
 
 
