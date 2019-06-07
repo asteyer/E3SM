@@ -2348,10 +2348,9 @@ contains
   end subroutine compute_stage_value_dirk
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(myJac, dt, expJdt)
-  real*8, intent(in) :: dt
-  real (kind=real_kind), dimension(:,:), intent(in) :: myJac
-  real (kind=real_kind), dimension(:,:), allocatable, intent(out), target :: expJdt
+  subroutine matrix_exponential(JacL, JacD, JacU, expJ)
+  real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
+  real (kind=real_kind), dimension(:,:), allocatable, intent(out), target :: expJ
  
   ! local
   real (kind=real_kind), allocatable, dimension(:,:) :: N, D, Aj, negAj, Jac,&
@@ -2359,17 +2358,21 @@ contains
   real (kind=real_kind), allocatable, dimension(:) :: work
   integer, allocatable, dimension(:) :: ipiv
   real (kind=real_kind) normJ, pfac, fac
-  integer, dimension(2) :: dimJac
-  integer i,p,info, maxiter, k
+  integer i,p,info, maxiter, k, dimJac
 
  
   p = 26            ! parameter used in diagonal Pade approximation
   pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
   ! Initialize random A and normalize
-!  print *, "shape of input Jac is", shape(myJac)
-  dimJac = shape(myJac)
-  allocate(Jac(dimJac(1), dimJac(2)))
-  Jac = myJac*dt
+  dimJac = size(JacD)
+  allocate(Jac(dimJac, dimJac))
+  Jac = 0
+  do i = 1,(dimJac-1)
+    Jac(i,i) = JacD(i)
+    Jac(i,i+1) = JacU(i)
+    Jac(i+1,i) = JacL(i) 
+  enddo
+  Jac(dimJac, dimJac) = JacD(dimJac)
 
   ! Scaling by power of 2
   maxiter = 10000
@@ -2380,25 +2383,25 @@ contains
   end do ! end while loop
 
   ! Initialize Aj,negAj = identity and N,D = 0.
-  allocate(N(dimJac(1), dimJac(2)))
+  allocate(N(dimJac, dimJac))
   N = 0.d0
-  allocate(D(dimJac(1), dimJac(2)))
+  allocate(D(dimJac, dimJac))
   D = 0.d0
-  allocate(Aj(dimJac(1), dimJac(2)))
+  allocate(Aj(dimJac, dimJac))
   Aj = 0.d0
-  allocate(negAj(dimJac(1), dimJac(2)))
+  allocate(negAj(dimJac, dimJac))
   negAj = 0.d0
-  allocate(Dinv(dimJac(1), dimJac(2)))
+  allocate(Dinv(dimJac, dimJac))
   Dinv = 0.d0
-  allocate(expJdt(dimJac(1), dimJac(2)))
-  expJdt = 0.d0
+  allocate(expJ(dimJac, dimJac))
+  expJ = 0.d0
 
-  allocate(work(dimJac(1)))
+  allocate(work(dimJac))
   work = 0.d0
-  allocate(ipiv(dimJac(1)))
+  allocate(ipiv(dimJac))
   ipiv = 0
 
-  do i = 1,dimJac(1)
+  do i = 1,dimJac
     Aj(i,i) = 1.d0
     negAj(i,i) = 1.d0
   enddo ! end do loop
@@ -2418,20 +2421,20 @@ contains
 
   ! Invert matrix D
   Dinv = D
-  call DGETRF(dimJac(1), dimJac(2), Dinv, dimJac(1), ipiv, info)
+  call DGETRF(dimJac, dimJac, Dinv, dimJac, ipiv, info)
   if (info /= 0) then
     stop 'Matrix is numerically singular!'
   end if
-  call DGETRI(dimJac(2), Dinv, dimJac(2), ipiv, work, dimJac(2), info)
+  call DGETRI(dimJac, Dinv, dimJac, ipiv, work, dimJac, info)
   if (info /= 0) then
     stop 'Matrix inversion failed!'
   end if
 
-  expJdt = matmul(Dinv, N)
+  expJ = matmul(Dinv, N)
 
   ! Squaring
   do i=1,k
-    expJdt = matmul(expJdt, expJdt)
+    expJ = matmul(expJ, expJ)
   end do
 
   end subroutine matrix_exponential

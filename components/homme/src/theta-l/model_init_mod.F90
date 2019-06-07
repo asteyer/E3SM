@@ -223,22 +223,23 @@ contains
   type(hybrid_t)    , intent(in) :: hybrid
 
   ! local
-  real (kind=real_kind), dimension(:,:), allocatable :: myJac, myexpJac, &
+  real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac, &
     exactExp, factor, factorInv
-  real (kind=real_kind), dimension(:), allocatable :: work
+  real (kind=real_kind), dimension(:), allocatable :: work, JacL, JacU, JacD
   integer, dimension(2) :: ipiv
-  real (kind = real_kind) :: error, dt
+  real (kind = real_kind) :: error
   integer :: n, info
 
   if (hybrid%masterthread) write(iulog,*)'Running matrix exponential unit test...'
-  allocate(myJac(2,2))  
-  myJac(1,1) = -49.d0
-  myJac(2,1) = -64.d0
-  myJac(1,2) = 24.d0
-  myJac(2,2) = 31.d0
-  dt = 1.d0
+  allocate(JacL(1))
+  JacL(1) = -64.d0
+  allocate(JacD(2))
+  JacD(1) = -49.d0
+  JacD(2) = 31.d0
+  allocate(JacU(1))
+  JacU(1) = 24.d0
   ! Rational approximation
-  call matrix_exponential(myJac, dt, myexpJac)
+  call matrix_exponential(JacL, JacD, JacU, approxexpJac)
   
   allocate(exactExp(2,2))
   exactExp = 0.d0
@@ -271,7 +272,7 @@ contains
   end if
 
   exactExp = matmul(exactExp, factorInv)  
-  error = norm2(exactExp - myexpJac)
+  error = norm2(exactExp - approxexpJac)
  
  if (error > 1e-3) then 
      write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
