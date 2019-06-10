@@ -226,40 +226,61 @@ contains
   real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac, &
     exactExp, factor, factorInv
   real (kind=real_kind), dimension(:), allocatable :: work, JacL, JacU, JacD
-  integer, dimension(2) :: ipiv
-  real (kind = real_kind) :: error
+  integer, dimension(10) :: ipiv
+  real (kind = real_kind) :: error, g
   integer :: n, info
 
+  g = 9.80616d0
+
   if (hybrid%masterthread) write(iulog,*)'Running matrix exponential unit test...'
-  allocate(JacL(1))
-  JacL(1) = -64.d0
-  allocate(JacD(2))
-  JacD(1) = -49.d0
-  JacD(2) = 31.d0
-  allocate(JacU(1))
-  JacU(1) = 24.d0
+  allocate(JacL(4))
+  JacL(1) = -0.5d0
+  JacL(2) = 3.d0
+  JacL(3) = 2.d0
+  JacL(4) = -0.5d0
+  allocate(JacD(5))
+  JacD(1) = 1.d0
+  JacD(2) = 2.d0
+  JacD(3) = 3.d0
+  JacD(4) = 4.d0
+  JacD(5) = 5.d0
+  allocate(JacU(4))
+  JacU(1) = -1.d0
+  JacU(2) = 1.d0
+  JacU(3) = 1.d0
+  JacU(4) = -1.d0
+
   ! Rational approximation
   call matrix_exponential(JacL, JacD, JacU, approxexpJac)
   
-  allocate(exactExp(2,2))
+  allocate(exactExp(10,10))
   exactExp = 0.d0
-  exactExp(1,1) = dexp(-1.d0)
-  exactExp(2,2) = dexp(-17.d0)
+  exactExp(1,1) = dexp(-23.47836142539358d0)
+  exactExp(2,2) = dexp(-21.44415804938605d0)
+  exactExp(3,3) = dexp(-17.32504794856435d0)
+  exactExp(4,4) = dexp(-10.86891900319917d0)
+  exactExp(5,5) = dexp(-3.61047819511278d0)
+  exactExp(6,6) = dexp(3.61047819511277d0)
+  exactExp(7,7) = dexp(10.86891900319915d0)
+  exactExp(8,8) = dexp(17.32504794856432d0)
+  exactExp(9,9) = dexp(23.47836142539358d0)
+  exactExp(10,10) = dexp(21.44415804938606d0)
 
-  allocate(factor(2,2))
-  factor(1,1) = 1.d0
-  factor(1,2) = 3.d0
-  factor(2,1) = 2.d0
-  factor(2,2) = 4.d0
+
+  allocate(factor(10,10))
+  factor = 0.d0
+  factor = transpose(reshape ((/ 0.0212499199286613d0, -0.0465499636221641d0, -0.1238822745137594d0, 0.5569933147775425d0, 0.1891629531478258d0, -0.1891629531478263d0, 0.5569933147775445d0, 0.1238822745137588d0, 0.0212499199286605d0, -0.0465499636221645d0, -0.100563438105257d0, 0.176057332583693d0, 0.262805205504131d0, -0.127272332410439d0, 0.163520026600016d0, -0.163520026600014d0, -0.127272332410440d0, -0.262805205504131d0, -0.100563438105256d0, 0.176057332583695d0, -0.364719516760239d0, 0.466536828019049d0, 0.232771480601183d0, 0.376687408086402d0, -0.210291804742811d0, 0.210291804742811d0, 0.376687408086400d0, -0.232771480601182d0, -0.364719516760238d0, 0.466536828019051d0, -0.694874734655787d0, 0.303250451079584d0, -0.760154625252612d0, -0.285485179028474d0, 0.111808181135995d0, -0.111808181135996d0, -0.285485179028472d0, 0.760154625252612d0, -0.694874734655787d0, 0.303250451079579d0, 0.4743723238723086d0, 0.6958968192738741d0, -0.2023206189236637d0, -0.0378476855429266d0, 0.0114924000219128d0, -0.0114924000219129d0, -0.0378476855429264d0, 0.2023206189236664d0, 0.4743723238723101d0, 0.695896819273874d0, -0.00887541132160408d0, 0.02128674813074270d0, 0.07011867491809791d0, -0.50253070816253920d0, -0.51377188405430785d0, -0.51377188405430840d0, 0.50253070816254053d0, 0.07011867491809784d0, 0.00887541132160332d0, -0.02128674813074299d0, 0.0420021289536699d0, -0.0805089371432946d0, -0.1487505201519482d0, 0.1148276893794683d0, -0.4441249766345471d0, -0.4441249766345470d0, -0.1148276893794691d0, -0.1487505201519481d0, -0.0420021289536693d0, 0.0805089371432959d0, 0.152331667090078d0, -0.213341776856483d0, -0.131751114859179d0, -0.339855048380919d0, 0.571158437347202d0, 0.571158437347202d0, 0.339855048380918d0, -0.131751114859180d0, -0.152331667090078d0, 0.213341776856484d0, 0.290226932984442d0, -0.138672846773003d0, 0.430255541115825d0, 0.257570540580701d0, -0.303674154579491d0, -0.303674154579491d0, -0.257570540580700d0, 0.430255541115824d0, -0.290226932984441d0, 0.138672846773001d0, -0.1981301345174984d0, -0.3182253897576577d0, 0.1145156057492402d0, 0.0341469524204183d0, -0.0312136806563270d0, -0.0312136806563271d0, -0.0341469524204179d0, 0.1145156057492416d0, 0.1981301345174994d0, 0.3182253897576582d0 /), shape(factor)))
+ 
   ! Actual analytic exponential
-  exactExp = matmul(factor,exactExp)
+!  exactExp = matmul(factor,exactExp)
 
-  allocate(factorInv(2,2))
+  allocate(factorInv(10,10))
+  factorInv = 0.d0
   factorInv = factor
-  allocate(work(2))
+  allocate(work(10))
   work = 0.d0
   ipiv = 0
-  n = 2
+  n = 10
 
   call DGETRF(n,n,factorInv,n,ipiv,info)
   if (info /= 0) then
@@ -271,7 +292,13 @@ contains
     stop 'Matrix inversion failed!'
   end if
 
-  exactExp = matmul(exactExp, factorInv)  
+  exactExp = matmul(matmul(factor, exactExp), factorInv)  
+!  print *, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+!  print *, "P is ", factor
+!  print *, "Pinv is ", factorInv
+!  print *, "exact Exp is ", exactExp
+!  print *, "approx Exp is ", approxexpJac
+  print *, "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`"
   error = norm2(exactExp - approxexpJac)
  
  if (error > 1e-3) then 

@@ -2357,23 +2357,27 @@ contains
     Dinv
   real (kind=real_kind), allocatable, dimension(:) :: work
   integer, allocatable, dimension(:) :: ipiv
-  real (kind=real_kind) normJ, pfac, fac
-  integer i,p,info, maxiter, k, dimJac
+  real (kind=real_kind) normJ, pfac, fac, g
+  integer i,p,info, maxiter, k, dimJac, halfdim
 
- 
-  p = 26            ! parameter used in diagonal Pade approximation
+  g = 9.80616d0 
+  p = 10            ! parameter used in diagonal Pade approximation
   pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
   ! Initialize random A and normalize
-  dimJac = size(JacD)
+  halfdim = size(JacD)
+  dimJac = 2*halfdim
   allocate(Jac(dimJac, dimJac))
   Jac = 0
-  do i = 1,(dimJac-1)
-    Jac(i,i) = JacD(i)
-    Jac(i,i+1) = JacU(i)
-    Jac(i+1,i) = JacL(i) 
+  do i = 1,(halfdim-1)
+    Jac(i,(i+halfdim)) = JacD(i)
+    Jac(i,(i+1+halfdim)) = JacU(i)
+    Jac((i+1),(i+halfdim)) = JacL(i) 
   enddo
-  Jac(dimJac, dimJac) = JacD(dimJac)
-
+  Jac(size(JacD), dimJac) = JacD(halfdim)
+  do i = 1,halfdim
+    Jac(i + halfdim,i) = 1
+  end do
+  Jac = Jac * g
   ! Scaling by power of 2
   maxiter = 10000
   k = 0
