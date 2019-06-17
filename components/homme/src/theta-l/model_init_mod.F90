@@ -71,7 +71,7 @@ contains
          call test_imex_jacobian(elem,hybrid,hvcoord,tl,nets,nete)
 
     ! unit test for matrix exponential
-    call test_matrix_exponential(hybrid)
+    call test_matrix_exponential2(hybrid)
 
     ! 
     ! compute scaling of sponge layer damping 
@@ -218,13 +218,13 @@ contains
   end subroutine test_imex_jacobian
 
 
-  subroutine test_matrix_exponential(hybrid)
+  subroutine test_matrix_exponential1(hybrid)
 
   type(hybrid_t)    , intent(in) :: hybrid
 
   ! local
   real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac, &
-    exactExp, factor, factorInv
+    exactExp, factor, factorInv, Jac, D
   real (kind=real_kind), dimension(:), allocatable :: work, JacL, JacU, JacD
   integer, dimension(10) :: ipiv
   real (kind = real_kind) :: error, g
@@ -251,22 +251,37 @@ contains
   JacU(4) = -1.d0
 
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU, approxexpJac)
+  call matrix_exponential(JacL, JacD, JacU, approxexpJac, Jac)
   
   allocate(exactExp(10,10))
   exactExp = 0.d0
-  exactExp(1,1) = dexp(-23.47836142539358d0)
-  exactExp(2,2) = dexp(-21.44415804938605d0)
-  exactExp(3,3) = dexp(-17.32504794856435d0)
-  exactExp(4,4) = dexp(-10.86891900319917d0)
-  exactExp(5,5) = dexp(-3.61047819511278d0)
-  exactExp(6,6) = dexp(3.61047819511277d0)
-  exactExp(7,7) = dexp(10.86891900319915d0)
-  exactExp(8,8) = dexp(17.32504794856432d0)
-  exactExp(9,9) = dexp(23.47836142539358d0)
-  exactExp(10,10) = dexp(21.44415804938606d0)
+  exactExp(1,1) = exp(-23.47836142539358d0)
+  exactExp(2,2) = exp(-21.44415804938605d0)
+  exactExp(3,3) = exp(-17.32504794856435d0)
+  exactExp(4,4) = exp(-10.86891900319917d0)
+  exactExp(5,5) = exp(-3.61047819511278d0)
+  exactExp(6,6) = exp(3.61047819511277d0)
+  exactExp(7,7) = exp(10.86891900319915d0)
+  exactExp(8,8) = exp(17.32504794856432d0)
+  exactExp(9,9) = exp(23.47836142539358d0)
+  exactExp(10,10) = exp(21.44415804938606d0)
+!  print *, "-----------------------------------------------------------"
+!  print *, "diagonal matrix is ", exactExp
+!  print *, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
 
-
+  allocate(D(10,10))
+  D = 0.d0
+  D(1,1) = -23.47836142539358d0
+  D(2,2) = -21.44415804938605d0
+  D(3,3) = -17.32504794856435d0
+  D(4,4) = -10.86891900319917d0
+  D(5,5) = -3.61047819511278d0
+  D(6,6) = 3.61047819511277d0
+  D(7,7) = 10.86891900319915d0
+  D(8,8) = 17.32504794856432d0
+  D(9,9) = 23.47836142539358d0
+  D(10,10) = 21.44415804938606d0
+!
   allocate(factor(10,10))
   factor = 0.d0
   factor = transpose(reshape ((/ 0.0212499199286613d0, -0.0465499636221641d0, -0.1238822745137594d0, 0.5569933147775425d0, 0.1891629531478258d0, -0.1891629531478263d0, 0.5569933147775445d0, 0.1238822745137588d0, 0.0212499199286605d0, -0.0465499636221645d0, -0.100563438105257d0, 0.176057332583693d0, 0.262805205504131d0, -0.127272332410439d0, 0.163520026600016d0, -0.163520026600014d0, -0.127272332410440d0, -0.262805205504131d0, -0.100563438105256d0, 0.176057332583695d0, -0.364719516760239d0, 0.466536828019049d0, 0.232771480601183d0, 0.376687408086402d0, -0.210291804742811d0, 0.210291804742811d0, 0.376687408086400d0, -0.232771480601182d0, -0.364719516760238d0, 0.466536828019051d0, -0.694874734655787d0, 0.303250451079584d0, -0.760154625252612d0, -0.285485179028474d0, 0.111808181135995d0, -0.111808181135996d0, -0.285485179028472d0, 0.760154625252612d0, -0.694874734655787d0, 0.303250451079579d0, 0.4743723238723086d0, 0.6958968192738741d0, -0.2023206189236637d0, -0.0378476855429266d0, 0.0114924000219128d0, -0.0114924000219129d0, -0.0378476855429264d0, 0.2023206189236664d0, 0.4743723238723101d0, 0.695896819273874d0, -0.00887541132160408d0, 0.02128674813074270d0, 0.07011867491809791d0, -0.50253070816253920d0, -0.51377188405430785d0, -0.51377188405430840d0, 0.50253070816254053d0, 0.07011867491809784d0, 0.00887541132160332d0, -0.02128674813074299d0, 0.0420021289536699d0, -0.0805089371432946d0, -0.1487505201519482d0, 0.1148276893794683d0, -0.4441249766345471d0, -0.4441249766345470d0, -0.1148276893794691d0, -0.1487505201519481d0, -0.0420021289536693d0, 0.0805089371432959d0, 0.152331667090078d0, -0.213341776856483d0, -0.131751114859179d0, -0.339855048380919d0, 0.571158437347202d0, 0.571158437347202d0, 0.339855048380918d0, -0.131751114859180d0, -0.152331667090078d0, 0.213341776856484d0, 0.290226932984442d0, -0.138672846773003d0, 0.430255541115825d0, 0.257570540580701d0, -0.303674154579491d0, -0.303674154579491d0, -0.257570540580700d0, 0.430255541115824d0, -0.290226932984441d0, 0.138672846773001d0, -0.1981301345174984d0, -0.3182253897576577d0, 0.1145156057492402d0, 0.0341469524204183d0, -0.0312136806563270d0, -0.0312136806563271d0, -0.0341469524204179d0, 0.1145156057492416d0, 0.1981301345174994d0, 0.3182253897576582d0 /), shape(factor)))
@@ -293,12 +308,12 @@ contains
   end if
 
   exactExp = matmul(matmul(factor, exactExp), factorInv)  
-!  print *, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+ ! print *, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 !  print *, "P is ", factor
 !  print *, "Pinv is ", factorInv
 !  print *, "exact Exp is ", exactExp
 !  print *, "approx Exp is ", approxexpJac
-  print *, "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`"
+!  print *, "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`"
   error = norm2(exactExp - approxexpJac)
  
  if (error > 1e-3) then 
@@ -312,9 +327,111 @@ contains
 
 
 
+  end subroutine test_matrix_exponential1
 
-  end subroutine test_matrix_exponential
+  subroutine test_matrix_exponential2(hybrid)
 
+  type(hybrid_t)    , intent(in) :: hybrid
+
+  ! local
+  real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac, &
+    Jac
+  complex*16, dimension(:,:), allocatable :: factor, factorInv, exactExp, D
+  complex*16, dimension(:), allocatable :: work
+  real (kind=real_kind), dimension(:), allocatable :: JacL, JacU, JacD
+  integer, dimension(8) :: ipiv
+  real (kind = real_kind) :: error, g
+  integer :: n, info
+
+  g = 9.80616d0
+
+  if (hybrid%masterthread) write(iulog,*)'Running matrix exponential unit test...'
+  allocate(JacL(3))
+  JacL(1) = -0.1d0
+  JacL(2) = -1.d0
+  JacL(3) = 0.2d0
+  allocate(JacD(4))
+  JacD(1) = -1.d0
+  JacD(2) = -1.d0
+  JacD(3) = -1.d0
+  JacD(4) = -1.d0
+  allocate(JacU(3))
+  JacU(1) = -0.5d0
+  JacU(2) = -0.3d0
+  JacU(3) = 0.1d0
+
+  ! Rational approximation
+  call matrix_exponential(JacL, JacD, JacU, approxexpJac, Jac)
+  
+  allocate(exactExp(8,8))
+  exactExp = (0.d0, 0.d0)
+  exactExp(1,1) = exp(cmplx(0.d0,12.42728757865824d0))
+  exactExp(2,2) = exp(cmplx(0.d0,-12.42728757865824d0))
+  exactExp(3,3) = exp(cmplx(0.d0, 6.15500376348600d0))
+  exactExp(4,4) = exp(cmplx(0.d0,-6.15500376348600d0))
+  exactExp(5,5) = exp(cmplx(0.d0, 10.05874895171580d0))
+  exactExp(6,6) = exp(cmplx(0.d0,-10.05874895171580d0))
+  exactExp(7,7) = exp(cmplx(0.d0, 9.54689045802644d0))
+  exactExp(8,8) = exp(cmplx(0.d0,-9.54689045802644d0))
+  allocate(D(8,8))
+  D = (0.d0, 0.d0)
+  D(1,1) = cmplx(0.d0,12.42728757865824d0)
+  D(2,2) = cmplx(0.d0,-12.42728757865824d0)
+  D(3,3) = cmplx(0.d0, 6.15500376348600d0)
+  D(4,4) = cmplx(0.d0,-6.15500376348600d0)
+  D(5,5) = cmplx(0.d0, 10.05874895171580d0)
+  D(6,6) = cmplx(0.d0,-10.05874895171580d0)
+  D(7,7) = cmplx(0.d0, 9.54689045802644d0)
+  D(8,8) = cmplx(0.d0,-9.54689045802644d0)
+!  print *, "-----------------------------------------------------------"
+!  print *, "diagonal matrix is ", exactExp
+!  print *, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+
+  allocate(factor(8,8))
+  factor = cmplx(0.d0,0.d0)
+  factor = reshape((/ (0.287993245000171d0, 0.d0), (0.349067421277112d0, 0.000000000000001d0), (0.609158053712011d0, 0.d0), (-0.201030968704744d0, 0.d0), (0.d0, -0.227250542124800d0), (0.000000000000001d0, -0.275443129658414d0), (0.d0, -0.480676197615885d0), (0.d0, 0.158630097806633d0), (0.287993245000171d0, 0.d0), (0.349067421277112d0, -0.000000000000001d0), (0.609158053712011d0, -0.d0), (-0.201030968704744d0, 0.d0), (0.d0, 0.227250542124800d0), (0.000000000000001d0, 0.275443129658414d0), (0.d0, 0.480676197615885d0), (0.d0, -0.158630097806633d0), (0.d0, 0.195028569017136d0), (0.000000000000001d0, -0.236387904383439d0), (-0.000000000000001d0, 0.412520868399696d0), (0.d0, 0.136137853353440d0), (0.310719769774749d0, 0.d0), (-0.376613516664338d0, 0.d0), (0.657228783979698d0, 0.d0), (0.216895004997409d0, 0.d0), (0.d0, -0.195028569017136d0), (0.000000000000001d0, 0.236387904383439d0), (-0.000000000000001d0, -0.412520868399696d0), (0.d0, -0.136137853353440d0), (0.310719769774749d0, 0.d0), (-0.376613516664338d0, 0.d0), (0.657228783979698d0, 0.d0), (0.216895004997409d0, 0.d0), (0.446685068099900d0, 0.d0), (0.046615936123790d0, 0.d0), (-0.140786977995072d0, 0.d0), (0.539621821055463d0, 0.d0), (0.d0,-0.435468194745166d0), (0.d0,-0.045445346173163d0), (0.d0, 0.137251624308673d0), (0.d0, -0.526071178648774d0), (0.446685068099900d0, 0.d0), (0.046615936123790d0, 0.d0), (-0.140786977995072d0, 0.d0), (0.539621821055463d0, 0.d0), (0.d0, 0.435468194745166d0), (0.d0, 0.045445346173163d0), (0.d0,-0.137251624308673d0), (0.d0, 0.526071178648774d0), (-0.000000000000001d0, -0.435163731128617d0), (0.d0, 0.045413572430284d0), (0.d0, 0.137155662935565d0), (0.d0, 0.525703368701800d0), (-0.446981683974023d0, 0.000000000000001d0), (0.046646890878332d0, 0.d0), (0.140880465903057d0, 0.d0), (0.539980150468232d0, 0.d0), (-0.000000000000001d0, 0.435163731128617d0), (0.d0, -0.045413572430284d0), (0.d0, -0.137155662935565d0), (0.d0, -0.525703368701800d0), (-0.446981683974023d0, -0.000000000000001d0), (0.046646890878332d0, 0.d0), (0.140880465903057d0, 0.d0), (0.539980150468232d0, 0.d0) /), shape(factor))
+ 
+  ! Actual analytic exponential
+  allocate(factorInv(8,8))
+  factorInv = cmplx(0.d0, 0.d0)
+  factorInv = factor
+  allocate(work(8))
+  work = cmplx(0.d0, 0.d0)
+  ipiv = 0
+  n = 8
+
+  call ZGETRF(n,n,factorInv,n,ipiv,info)
+  if (info /= 0) then
+    stop 'Matrix is numerically singular!'
+  end if
+
+  call ZGETRI(n,factorInv,n,ipiv,work,n,info)
+  if (info /= 0) then
+    stop 'Matrix inversion failed!'
+  end if
+
+  exactExp = matmul(matmul(factor, exactExp), factorInv)  
+!  print *, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+!  print *, "P is ", factor
+!  print *, "Pinv is ", factorInv
+!  print *, "exact Exp is ", exactExp
+!  print *, "approx Exp is ", approxexpJac
+!  print *, "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`"
+  error = norm2(real(exactExp) - approxexpJac)
+ 
+ if (error > 1e-3) then 
+     write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
+     write(iulog,*)'Please check that the exact matrix exponential in eos.F90 is actually exact'
+  else
+     if (hybrid%masterthread) write(iulog,*)&
+          'PASS. max error of analytic and exact matrix exponential: ', error
+  end if
+
+!  print *, "------------------------------------------------"
+!  print *, "Jac = VDVinv?", norm2(real(Jac - matmul(matmul(factor, D), factorInv)))
+
+
+  end subroutine test_matrix_exponential2
 
 
 end module 

@@ -2348,36 +2348,39 @@ contains
   end subroutine compute_stage_value_dirk
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(JacL, JacD, JacU, expJ)
+  subroutine matrix_exponential(JacL, JacD, JacU, expJ, myJac)
   real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
   real (kind=real_kind), dimension(:,:), allocatable, intent(out), target :: expJ
  
   ! local
   real (kind=real_kind), allocatable, dimension(:,:) :: N, D, Aj, negAj, Jac,&
-    Dinv
+    Dinv, myJac, iden, DinvN, Tri
   real (kind=real_kind), allocatable, dimension(:) :: work
   integer, allocatable, dimension(:) :: ipiv
-  real (kind=real_kind) normJ, pfac, fac, g
-  integer i,p,info, maxiter, k, dimJac, halfdim
+  real (kind=real_kind) normJ, pfac, fac, g, alpha
+  integer i,j,p,info, maxiter, k, dimJac, halfdim
 
   g = 9.80616d0 
-  p = 10            ! parameter used in diagonal Pade approximation
+  p = 2          ! parameter used in diagonal Pade approximation
   pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
   ! Initialize random A and normalize
   halfdim = size(JacD)
   dimJac = 2*halfdim
   allocate(Jac(dimJac, dimJac))
-  Jac = 0
+  Jac = 0.d0
   do i = 1,(halfdim-1)
     Jac(i,(i+halfdim)) = JacD(i)
     Jac(i,(i+1+halfdim)) = JacU(i)
     Jac((i+1),(i+halfdim)) = JacL(i) 
   enddo
-  Jac(size(JacD), dimJac) = JacD(halfdim)
+  Jac(halfdim, dimJac) = JacD(halfdim)
   do i = 1,halfdim
-    Jac(i + halfdim,i) = 1
+    Jac(i + halfdim,i) = 1.d0
   end do
   Jac = Jac * g
+  allocate(myJac(dimJac,dimJac))
+  myJac = 0.d0
+  myJac = Jac
   ! Scaling by power of 2
   maxiter = 10000
   k = 0
@@ -2385,6 +2388,16 @@ contains
     Jac = Jac / 2.d0
     k = k + 1
   end do ! end while loop
+
+  allocate(Tri(halfdim, halfdim))
+  Tri = 0.d0
+  do i = 1, (halfdim-1)
+    Tri(i,i) = Jac(i,(i+halfdim))
+    Tri(i,i+1) = Jac(i,(i+1+halfdim))
+    Tri(i+1,i) = Jac((i+1),(i+halfdim))
+  end do
+  Tri(halfdim, halfdim) = Jac(halfdim, dimJac)
+  alpha = Jac((halfdim + 1), 1)
 
   ! Initialize Aj,negAj = identity and N,D = 0.
   allocate(N(dimJac, dimJac))
@@ -2399,6 +2412,8 @@ contains
   Dinv = 0.d0
   allocate(expJ(dimJac, dimJac))
   expJ = 0.d0
+  allocate(iden(dimJac, dimJac))
+  iden = 0.d0
 
   allocate(work(dimJac))
   work = 0.d0
@@ -2408,15 +2423,12 @@ contains
   do i = 1,dimJac
     Aj(i,i) = 1.d0
     negAj(i,i) = 1.d0
+    iden(i,i) = 1.d0
   enddo ! end do loop
 
   ! series for Pade approximation
   do i=0,p
-    ! the gamma function provides some roundoff. We should use a look-up table
-    ! instead 
     fac = gamma(dble(2*p-i+1))/(gamma(dble(i+1))*gamma(dble(p-i+1)))*pfac
-!    print *, "********** (i + 1) = ", dble(i+1)
-!    print *, "********** gamma(i+1) = ", dgamma(dble(i+1))
     D = D + fac*negAj
     N = N + fac*Aj
     negAj = matmul(negAj,(-1.d0)*Jac)
@@ -2424,23 +2436,159 @@ contains
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  Dinv = D
-  call DGETRF(dimJac, dimJac, Dinv, dimJac, ipiv, info)
-  if (info /= 0) then
-    stop 'Matrix is numerically singular!'
-  end if
-  call DGETRI(dimJac, Dinv, dimJac, ipiv, work, dimJac, info)
-  if (info /= 0) then
-    stop 'Matrix inversion failed!'
-  end if
-
-  expJ = matmul(Dinv, N)
-
+  call get_DinvN(p, D, N, DinvN, Tri, alpha, 2) ! using tridiagonal solves
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 1)  ! using full LU factorization
+  print *, "----------test------------------"
+  print *, " diff in methods ", norm2(DinvN- expJ)
+  print *, "-------------------------------"
   ! Squaring
   do i=1,k
     expJ = matmul(expJ, expJ)
+    DinvN = matmul(DinvN, DinvN)
   end do
 
   end subroutine matrix_exponential
+
+  subroutine get_DinvN(p, D, N, DinvN, Tri, alph, opt)
+  real (kind=real_kind), dimension(:,:), intent(in) :: D, N, Tri
+  integer, intent(in) :: p, opt
+  real (kind=real_kind), dimension(:,:), allocatable, intent(out), target :: DinvN
+  real (kind=real_kind), intent(in):: alph
+ 
+  ! local variables
+  complex*16 sig1, sig2, sig1Inv, sig2Inv, kfac, alpha
+  integer :: block_dim, dimJac, info, i
+  integer, dimension(:), allocatable :: ipiv
+  complex*16, dimension(:), allocatable :: work, TriD, TriL, TriU
+  complex*16, dimension(:,:), allocatable :: B, X1, X2, N1, N2, myTri
+
+  alpha = dcmplx(alph)
+  dimJac = size(D,1)
+  block_dim = dimJac/2
+  kfac = (12.d0, 0.d0)
+  sig1 = dcmplx(3.d0,sqrt(3.d0))
+  sig2 = dcmplx(3.d0, (-sqrt(3.d0)))
+  sig1Inv = conjg(sig1)/(real(sig1)**2 + imag(sig1)**2)
+  sig2Inv = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
+
+  ! Invert matrix D
+    allocate(DinvN(dimJac, dimJac))
+    DinvN = 0.d0
+ 
+  if (opt == 1) then  ! Calculate inverse using full LU decomp
+    DinvN = D
+    allocate(work(dimJac))
+    work = 0.d0
+    allocate(ipiv(dimJac))
+    ipiv = 0
+    call DGETRF(dimJac, dimJac, DinvN, dimJac, ipiv, info)
+    call DGETRI(dimJac, DinvN, dimJac, ipiv, work, dimJac, info)
+
+    DinvN = matmul(DinvN, N)
+
+  else
+    if (p /= 2) then
+      stop 'Must have p = 2 approximation' ! Factoring done by hand - only for p=2
+    end if
+    allocate(X1(block_dim, dimJac)) ! Partition into block system
+    X1 = 0.d0
+    allocate(X2(block_dim,dimJac))
+    X2 = 0.d0
+    allocate(N1(block_dim, dimJac))
+    N1 = 0.d0
+    N1 = dcmplx(N(1:block_dim, 1:dimJac))
+    allocate(N2(block_dim, dimJac))
+    N2 = 0.d0
+    N2 = dcmplx(N(block_dim+1:dimJac, 1:dimJac))
+! sig1I-Jac is not nice to invert. We left multiply by (I& 0\\ gsig1InvI& I) so
+! that we can solve the triangular system 
+! (-g^2sig1InvTri + sig1I)X2 = (gsig1InvN1+N2)  and back substitute to get
+! X1 = sig1Inv(N1+gTriX2)
+    allocate(TriD(block_dim))
+    allocate(TriU(block_dim-1))
+    allocate(TriL(block_dim-1))
+    do i = 1,block_dim-1
+      TriD(i) = dcmplx(Tri(i,i),0.d0)
+      TriL(i) = dcmplx(Tri(i+1,i),0.d0)
+      TriU(i) = dcmplx(Tri(i,i+1),0.d0)
+    end do
+   TriD(block_dim) = dcmplx(Tri(block_dim, block_dim), 0.d0)
+
+    ! solve for X1 and X2
+    TriD = TriD*(-sig1Inv)*alpha
+    TriL = TriL*(-sig1Inv)*alpha
+    TriU = TriU*(-sig1Inv)*alpha
+ 
+    do i = 1,block_dim
+      TriD(i) = TriD(i) + sig1
+    end do
+
+    ! for testing purposes
+    allocate(myTri(block_dim, block_dim))
+    myTri = 0.d0
+    do i = 1,block_dim-1
+      myTri(i,i) = TriD(i)
+      myTri(i+1,i) = TriL(i)
+      myTri(i,i+1) = TriU(i)
+    end do
+    myTri(block_dim, block_dim) = TriD(block_dim)
+
+    allocate(B(block_dim,dimJac))
+    B = 0.d0
+    B = (kfac*(alpha*sig1Inv*N1 + N2))
+    call ZGTSV(block_dim, dimJac, TriL, TriD, TriU, B, block_dim, info)
+
+
+    X2 = B
+    X1 = sig1Inv * (kfac*N1 + matmul(Tri,X2))
+!    print *, "-----------test2-----------"
+!    print *, matmul(myTri,X2) -( kfac*(g*sig1Inv*N1 + N2))
+!    print *, "----------test4-----------"
+!    print *, -alpha*X1 + sig1*X2 - kfac*N2
+! Now do the second tridiag solve
+    N1 = X1
+    N2 = X2
+    do i = 1,block_dim-1  ! ZGTSV writes over Tri, so we have to get it again
+      TriD(i) = dcmplx(Tri(i,i),0.d0)
+      TriL(i) = dcmplx(Tri(i+1,i),0.d0)
+      TriU(i) = dcmplx(Tri(i,i+1),0.d0)
+    end do
+    TriD(block_dim) = dcmplx(Tri(block_dim, block_dim),0.d0)
+
+    ! solve for X1 and X2
+    TriD = TriD*(-sig2Inv)*alpha
+    TriL = TriL*(-sig2Inv)*alpha
+    TriU = TriU*(-sig2Inv)*alpha
+ 
+    do i = 1,block_dim
+      TriD(i) = TriD(i) + sig2
+    end do
+
+    ! for testing purposes
+    do i = 1, block_dim
+      myTri(i,i) = myTri(i,i) - sig1
+    end do
+    myTri = myTri * sig2Inv * sig1
+    do i = 1,block_dim
+      myTri(i,i) = myTri(i,i) + sig2
+    end do
+
+    B = (alpha*sig2Inv*dcmplx(N1) + dcmplx(N2))
+
+    call ZGTSV(block_dim, dimJac, TriL, TriD, TriU, B, block_dim, info)
+    X2 = B
+
+    X1 = sig2Inv * (N1 + matmul(Tri,X2))
+!    print *, "-----------test3-----------"
+!    print *, matmul(myTri,X2) -(g*sig2Inv*cmplx(N1) + cmplx(N2))
+!    print *, "------------test5-----------"
+!    print *, -alpha*X1 + sig2*X2 - N2
+    DinvN(1:block_dim, :) = real(X1)
+    DinvN(block_dim+1:dimJac, :) = real(X2)
+
+
+  end if
+
+  end subroutine get_DinvN
 
 end module prim_advance_mod
