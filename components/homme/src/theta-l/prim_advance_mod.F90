@@ -455,6 +455,51 @@ contains
       avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
 
 !===================================================================================
+    elseif (tstep_type == 11) then ! Integrating factor method
+! New variables that I am adding.
+      real (kind=real_kind), dimension(:), allocatable :: wvec
+      real (kind=real_kind) :: h1, h2, tm, tmp1
+
+      a1 = 1.d0 ! Coefficient in RK method
+
+      do ie=nets,nete
+        w_n0 => elem(ie)%state%w_i(:,:,:,np1)
+        phi_n0 => elem(ie)%state%phinh_i(:,:,:,np1)
+
+    ! approximate the initial error of f(x) \approx 0
+        dp3d  => elem(ie)%state%dp3d(:,:,:,np1)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,np1)
+        phi_np1 => elem(ie)%state%phinh_i(:,:,:,np1)
+        phis => elem(ie)%state%phis(:,:)
+
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        do i=1,np
+          do j=1,np
+
+            dp3d_i(:,:,1) = dp3d(:,:,1)
+            dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
+            do k=2,nlev
+              dp3d_i(:,:,k)=(dp3d(:,:,k)+dp3d(:,:,k-1))/2
+            end do
+
+      ! here's the call to the exact Jacobian
+            call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+            allocate(wvec(2*size(JacD)))
+            wvec(1:size(w_n0) = w_n0
+            wvec(1+size(w_0)) = phi_n0
+            call matrix_exponential(JacL(:,i,j)*tm,JacD(:,i,j)*tm,JacU(:,i,j)*tm,expJ,h1,wvec) ! not sure which np index i should use for Jac
+            call matrix_exponential(JacL(:,i,j)*(tm+a1*dt2),JacD(:,i,j)*(tm+a1*dt2), JacU(:,i,j)*(tm+a1*dt2), expJ, h2, wvec)
+            call compute_N(h1)
+            call matrix_exponential(a1*dt2*JacL(:,i,j),a1*dt2*JacD(:,i,j),a1*dt2*JacU(:,i,j),expJ,h1,h1)
+            h2 = h2 + a1*dt2*h1
+            call matrix_exponential(Jacl(:,i,j)*tmp1, JacD(:,i,j)*tmp1,JacU(:,i,j)*tmp1, expJ, ump1, wvec) ! This makes more sense, but doesn't match notes. Need to check.
+            call compute_N(h2)
+            call matrix_exponential(dt2*JacL(:,i,j), dt2*JacD(:,i,j), dt2*JacU(:,i,j),expJ, h2, h2)
+            ump1 = ump1 + dt2*h2
+          end do 
+        end do
+      end do
+
     else
        call abortmp('ERROR: bad choice of tstep_type')
     endif
@@ -2348,13 +2393,14 @@ contains
   end subroutine compute_stage_value_dirk
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(JacL, JacD, JacU, expJ, myJac)
+  subroutine matrix_exponential(JacL, JacD, JacU, expJ, expResult, w)
   real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
   real (kind=real_kind), dimension(:,:), allocatable, intent(out), target :: expJ
- 
+  real (kind=real_kind), dimension(:), allocatable, intent(out) :: expResult
+  real (kind=real_kind), dimension(:), intent(inout) :: w 
   ! local
   real (kind=real_kind), allocatable, dimension(:,:) :: N, D, Aj, negAj, Jac,&
-    Dinv, myJac, iden, DinvN, Tri
+    Dinv, iden, DinvN, Tri
   real (kind=real_kind), allocatable, dimension(:) :: work
   integer, allocatable, dimension(:) :: ipiv
   real (kind=real_kind) normJ, pfac, fac, g, alpha
@@ -2378,9 +2424,6 @@ contains
     Jac(i + halfdim,i) = 1.d0
   end do
   Jac = Jac * g
-  allocate(myJac(dimJac,dimJac))
-  myJac = 0.d0
-  myJac = Jac
   ! Scaling by power of 2
   maxiter = 10000
   k = 0
@@ -2436,16 +2479,24 @@ contains
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  call get_DinvN(p, D, N, DinvN, Tri, alpha, 2) ! using tridiagonal solves
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 1)  ! using full LU factorization
-  print *, "----------test------------------"
-  print *, " diff in methods ", norm2(DinvN- expJ)
-  print *, "-------------------------------"
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 2) ! using tridiagonal solves
+!  call get_DinvN(p, D, N, DinvN, Tri, alpha, 1)  ! using full LU factorization
+!  print *, "----------test------------------"
+!  print *, " diff in methods ", norm2(DinvN- expJ)
+!  print *, "-------------------------------"
   ! Squaring
   do i=1,k
     expJ = matmul(expJ, expJ)
-    DinvN = matmul(DinvN, DinvN)
+!    DinvN = matmul(DinvN, DinvN)
   end do
+  allocate(expResult(dimJac))
+  expResult = 0.d0
+  expResult = matmul(expJ, w)
+!  print *, "___________________________________"
+!  print *, "w ", w
+!  print *, "expJ ", expJ
+!  print *, "expProduct ", expResult
+
 
   end subroutine matrix_exponential
 
@@ -2590,5 +2641,13 @@ contains
   end if
 
   end subroutine get_DinvN
+!===========================================================================================================
+  subroutine compute_N(h)
+  real (kind=real_kind), intent(inout) :: h
+
+  !To do: figure out how to compute N(h)
+
+
+  end subroutine
 
 end module prim_advance_mod

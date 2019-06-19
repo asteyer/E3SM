@@ -224,8 +224,8 @@ contains
 
   ! local
   real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac, &
-    exactExp, factor, factorInv, Jac, D
-  real (kind=real_kind), dimension(:), allocatable :: work, JacL, JacU, JacD
+    exactExp, factor, factorInv, D
+  real (kind=real_kind), dimension(:), allocatable :: work, JacL, JacU, JacD, w, expProduct
   integer, dimension(10) :: ipiv
   real (kind = real_kind) :: error, g
   integer :: n, info
@@ -250,8 +250,12 @@ contains
   JacU(3) = 1.d0
   JacU(4) = -1.d0
 
+  allocate(w(10))
+  w = 0.d0
+  w(3) = 1.d0
+
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU, approxexpJac, Jac)
+  call matrix_exponential(JacL, JacD, JacU, approxexpJac, expProduct, w)
   
   allocate(exactExp(10,10))
   exactExp = 0.d0
@@ -298,14 +302,7 @@ contains
   n = 10
 
   call DGETRF(n,n,factorInv,n,ipiv,info)
-  if (info /= 0) then
-    stop 'Matrix is numerically singular!'
-  end if
-
   call DGETRI(n,factorInv,n,ipiv,work,n,info)
-  if (info /= 0) then
-    stop 'Matrix inversion failed!'
-  end if
 
   exactExp = matmul(matmul(factor, exactExp), factorInv)  
  ! print *, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -334,11 +331,10 @@ contains
   type(hybrid_t)    , intent(in) :: hybrid
 
   ! local
-  real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac, &
-    Jac
+  real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac
   complex*16, dimension(:,:), allocatable :: factor, factorInv, exactExp, D
   complex*16, dimension(:), allocatable :: work
-  real (kind=real_kind), dimension(:), allocatable :: JacL, JacU, JacD
+  real (kind=real_kind), dimension(:), allocatable :: JacL, JacU, JacD, w, expProduct
   integer, dimension(8) :: ipiv
   real (kind = real_kind) :: error, g
   integer :: n, info
@@ -360,8 +356,12 @@ contains
   JacU(2) = -0.3d0
   JacU(3) = 0.1d0
 
+  allocate(w(8))
+  w = 0.d0
+  w(2) = 1.d0
+
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU, approxexpJac, Jac)
+  call matrix_exponential(JacL, JacD, JacU, approxexpJac, expProduct, w)
   
   allocate(exactExp(8,8))
   exactExp = (0.d0, 0.d0)
@@ -426,10 +426,6 @@ contains
      if (hybrid%masterthread) write(iulog,*)&
           'PASS. max error of analytic and exact matrix exponential: ', error
   end if
-
-!  print *, "------------------------------------------------"
-!  print *, "Jac = VDVinv?", norm2(real(Jac - matmul(matmul(factor, D), factorInv)))
-
 
   end subroutine test_matrix_exponential2
 
