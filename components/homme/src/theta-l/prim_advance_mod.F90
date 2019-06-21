@@ -93,7 +93,7 @@ contains
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
     integer :: n,i,j,maxiter
  ! New variables that I am adding.
-    real (kind=real_kind), dimension(:), allocatable :: wvec, ump1, h1, h2
+    real (kind=real_kind), dimension(:), allocatable :: wvec, ump1 
     real (kind=real_kind) :: tm, tmp1
     real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
     real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
@@ -107,7 +107,7 @@ contains
     real (kind=real_kind) :: dp3d_i(np,np,nlevp)
     real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
     real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
-
+    real (kind=real_kind), dimension(:,:,:), allocatable :: u_m_wvec
     real (kind=real_kind) :: dphi(nlev)
     integer :: wsize, phisize
 
@@ -474,8 +474,7 @@ contains
 !===================================================================================
     elseif (tstep_type == 11) then ! Integrating factor method
       a1 = 1.d0 ! Coefficient in RK method
-     
-      do ie=nets,nete
+      do ie = nets,nete
         w_n0 => elem(ie)%state%w_i(:,:,:,np1)
         phi_n0 => elem(ie)%state%phinh_i(:,:,:,np1)
 
@@ -483,57 +482,77 @@ contains
         dp3d  => elem(ie)%state%dp3d(:,:,:,np1)
         vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,np1)
         phi_np1 => elem(ie)%state%phinh_i(:,:,:,np1)
-        phis => elem(ie)%state%phis(:,:)
 
         call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        do i=1,np
-          do j=1,np
-            wsize = size(elem(ie)%state%w_i(:,i,j,np1))
-            phisize = size(elem(ie)%state%w_i(:,i,j,np1))
+        wsize = size(elem(ie)%state%w_i(:,1,1,np1))
+        phisize = size(elem(ie)%state%w_i(:,1,1,np1))
 
-            dp3d_i(:,:,1) = dp3d(:,:,1)
-            dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
-            do k=2,nlev
-              dp3d_i(:,:,k)=(dp3d(:,:,k)+dp3d(:,:,k-1))/2
-            end do
+        dp3d_i(:,:,1) = dp3d(:,:,1)
+        dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
+        do k = 2, nlev
+          dp3d_i(:,:,k) = (dp3d(:,:,k) + dp3d(:,:,k - 1)) / 2
+        end do
 
       ! here's the call to the exact Jacobian
-            call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-            call compute_nonlinear_rhs(n0,n0,np1,qn0,elem,hvcoord,hybrid,& 
-               deriv,nets,nete,compute_diagnostics,eta_ave_w,ie,i,j, JacL, JacD, JacU)  !stores N(h1) in elem(n0)
-            ! Compute u_m + alpha*dt2*N(h1) and stores it in elem(n0)
-            elem(ie)%state%dp3d(:,:,:,n0) = elem(ie)%state%dp3d(:,:,:,n0) * dt2 + elem(ie)%state%dp3d(:,:,:,np1) 
-            elem(ie)%state%w_i(:,:,:,n0) = elem(ie)%state%w_i(:,:,:,n0) *dt2 + elem(ie)%state%w_i(:,:,:,np1) 
-            elem(ie)%state%phinh_i(:,:,:,n0) = elem(ie)%state%phinh_i(:,:,:,n0)*dt2+ elem(ie)%state%phinh_i(:,:,:,np1) 
-            elem(ie)%state%vtheta_dp(:,:,:,n0) =elem(ie)%state%vtheta_dp(:,:,:,n0)*dt2+ elem(ie)%state%vtheta_dp(:,:,:,np1) 
-            elem(ie)%state%phis(:,:) =elem(ie)%state%phis(:,:)*dt2+ elem(ie)%state%phis(:,:)
-            
-            ! grabs wvec for linear operation
-            allocate(wvec(wsize+phisize))
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        call compute_nonlinear_rhs(n0,n0,np1,qn0,elem,hvcoord,hybrid,& 
+           deriv,nets,nete,compute_diagnostics,eta_ave_w,ie, JacL, JacD, JacU)  !stores N(h1) in elem(n0)
+       ! Compute u_m + alpha*dt2*N(h1) and stores it in elem(n0)
+        elem(ie)%state%dp3d(:,:,:,n0) = elem(ie)%state%dp3d(:,:,:,n0) * dt2 + elem(ie)%state%dp3d(:,:,:,np1) 
+        elem(ie)%state%w_i(:,:,:,n0) = elem(ie)%state%w_i(:,:,:,n0) * dt2 + elem(ie)%state%w_i(:,:,:,np1) 
+        elem(ie)%state%phinh_i(:,:,:,n0) = elem(ie)%state%phinh_i(:,:,:,n0) * dt2 + elem(ie)%state%phinh_i(:,:,:,np1) 
+        elem(ie)%state%vtheta_dp(:,:,:,n0) = elem(ie)%state%vtheta_dp(:,:,:,n0) * dt2 + elem(ie)%state%vtheta_dp(:,:,:,np1) 
+        elem(ie)%state%v(:,:,:,:,n0) = elem(ie)%state%v(:,:,:,:,n0) * dt2 + elem(ie)%state%v(:,:,:,:,np1)        
+
+        allocate(wvec(wsize + phisize))
+        allocate(u_m_wvec(wsize+phisize,np,np))
+        u_m_wvec = 0.d0
+        do i = 1,np
+          do j = 1,np
+       ! grabs wvec for linear operation
             wvec(1:wsize) = elem(ie)%state%w_i(:,i,j,n0)
-            wvec(1+wsize:wsize+phisize) = elem(ie)%state%phinh_i(:,i,j,n0)
+            wvec(1 + wsize:wsize + phisize) = elem(ie)%state%phinh_i(:,i,j,n0)
+!            wvec(1:phisize) = elem(ie)%state%phinh_i(:,i,j,n0)
+!            wvec(1 + phisize:wsize + phisize) = elem(ie)%state%w_i(:,i,j,n0)
             
-            call matrix_exponential(JacL(:,i,j)*tm,JacD(:,i,j)*tm,JacU(:,i,j)*tm,h2,(wvec+dt2*h1)) ! = h2
+            call matrix_exponential(JacL(:,i,j) * tm,JacD(:,i,j) * tm,JacU(:,i,j) * tm,wvec,wvec) ! = h2 update for wvec
             ! need to store h2 in elem to put it into compute nonlinear rhs
             elem(ie)%state%w_i(:,i,j,n0) = wvec(1:wsize)
-            elem(ie)%state%phinh_i(:,i,j,n0) = wvec(1+wsize:wsize+phisize)
+            elem(ie)%state%phinh_i(:,i,j,n0) = wvec(1 + wsize:wsize + phisize)
+!            elem(ie)%state%w_i(:,i,j,n0) = wvec(phisize+1:wsize+phisize)
+!            elem(ie)%state%phinh_i(:,i,j,n0) = wvec(1:phisize)
+           
             ! grab wvec from u_m to use in next calculation
-            wvec(1:wsize) = elem(ie)%state%w_i(:,i,j,np1)
-            wvec(wsize+1:wsize+phisize) = elem(ie)%state%phinh_i(:,i,j,np1)
+            u_m_wvec(1:wsize,i,j) = elem(ie)%state%w_i(:,i,j,np1)
+            u_m_wvec(wsize + 1:wsize + phisize,i,j) = elem(ie)%state%phinh_i(:,i,j,np1)
+!            u_m_wvec(1+phisize:phisize+wsize,i,j) = elem(ie)%state%w_i(:,i,j,np1)
+!            u_m_wvec(1:phisize,i,j) = elem(ie)%state%phinh_i(:,i,j,np1)
  
-            call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-               deriv,nets,nete,compute_diagnostics,eta_ave_w,ie,i,j, JacL, JacD, JacU) ! Computes N(h2) and stores it in elem(np1)
-            elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2
-            elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) *dt2
-            elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1)*dt2
-            elem(ie)%state%vtheta_dp(:,:,:,np1) =elem(ie)%state%vtheta_dp(:,:,:,np1)*dt2
-            elem(ie)%state%phis(:,:) =elem(ie)%state%phis(:,:)*dt2
- 
-            call matrix_exponential(dt2*JacL(:,i,j),dt2*JacD(:,i,j),dt2*JacU(:,i,j),h1,wvec) ! compute matrix exponential with wvec from u_m
-            elem(ie)%state%w_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) + wvec(1:wsize)
-            elem(ie)%state%phinh_i(:,i,j,np1) = elem(ie)%state%phinh_i(:,i,j,np1) + wvec(wsize+1:wsize+phisize) ! update elem with e^Lt*wvec
+          end do
+        end do 
+        call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+           deriv,nets,nete,compute_diagnostics,eta_ave_w,ie, JacL, JacD, JacU) ! Computes N(h2) and stores it in elem(nm1)
+        elem(ie)%state%dp3d(:,:,:,nm1) = elem(ie)%state%dp3d(:,:,:,nm1) * dt2
+        elem(ie)%state%w_i(:,:,:,nm1) = elem(ie)%state%w_i(:,:,:,nm1) * dt2
+        elem(ie)%state%phinh_i(:,:,:,nm1) = elem(ie)%state%phinh_i(:,:,:,nm1) * dt2
+        elem(ie)%state%vtheta_dp(:,:,:,nm1) = elem(ie)%state%vtheta_dp(:,:,:,nm1) * dt2
+        elem(ie)%state%v(:,:,:,:,nm1) = elem(ie)%state%v(:,:,:,:,nm1) * dt2
+        do i = 1,np
+          do j = 1,np
+            wvec(1:wsize) = u_m_wvec(1:wsize,i,j)
+            wvec(1 + wsize:wsize + phisize) = u_m_wvec(1 + wsize:wsize + phisize,i,j) 
+!            wvec(1+phisize:phisize+wsize) = u_m_wvec(1+phisize:phisize+wsize,i,j)
+!            wvec(1:phisize) = u_m_wvec(1:phisize,i,j) 
+            call matrix_exponential(dt2 * JacL(:,i,j),dt2 * JacD(:,i,j),dt2 * JacU(:,i,j),wvec,wvec) ! compute matrix exponential with wvec from u_m
+            elem(ie)%state%w_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,nm1) + wvec(1:wsize)
+            elem(ie)%state%phinh_i(:,i,j,np1) = elem(ie)%state%phinh_i(:,i,j,nm1) + wvec(wsize + 1:wsize + phisize) ! update elem with e^Lt*wvec
+!            elem(ie)%state%w_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) + wvec(1+phisize:phisize+wsize)
+!            elem(ie)%state%phinh_i(:,i,j,np1) = elem(ie)%state%phinh_i(:,i,j,np1) + wvec(1:phisize) ! update elem with e^Lt*wvec
           end do 
         end do
+        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) + elem(ie)%state%vtheta_dp(:,:,:,nm1)
+        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) + elem(ie)%state%dp3d(:,:,:,nm1)
+        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) + elem(ie)%state%v(:,:,:,:,nm1)
       end do
 
     else
@@ -1661,8 +1680,9 @@ contains
         enddo
         enddo
         ! w boundary condition. just in case:
-        !elem(ie)%state%w_i(:,:,nlevp,n0) = (elem(ie)%state%v(:,:,1,nlev,n0)*elem(ie)%derived%gradphis(:,:,1) + &
-        !     elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
+        ! Uncommenting the following, so that bc are preserved
+        elem(ie)%state%w_i(:,:,nlevp,n0) = (elem(ie)%state%v(:,:,1,nlev,n0)*elem(ie)%derived%gradphis(:,:,1) + &
+             elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
 
         ! check for layer spacing <= 1m
         do k=1,nlev
@@ -2238,8 +2258,8 @@ contains
   end subroutine compute_andor_apply_rhs
 
   subroutine compute_nonlinear_rhs(np1,nm1,n0,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,eta_ave_w,ie,i,j, JacL, JacD, JacU)
-  integer,              intent(in) :: np1,nm1,n0,qn0,nets,nete, ie,i,j
+       deriv,nets,nete,compute_diagnostics,eta_ave_w,ie, JacL, JacD, JacU)
+  integer,              intent(in) :: np1,nm1,n0,qn0,nets,nete, ie
   real (kind=real_kind), dimension(:,:,:), intent(in) :: JacL, JacD, JacU
   logical,              intent(in) :: compute_diagnostics
   type (hvcoord_t),     intent(in) :: hvcoord
@@ -2254,38 +2274,47 @@ contains
   real (kind=real_kind), dimension(:), allocatable :: wvec
   real (kind=real_kind), dimension(:,:), allocatable :: L
   real (kind=real_kind) :: g = 9.80616d0
-  integer :: ii, dimJac, wsize, phisize
+  integer :: ii, dimJac, wsize, phisize,i,j
 
-  wsize = size(elem(ie)%state%w_i(:,i,j,np1))
-  phisize = size(elem(ie)%state%phinh_i(:,i,j,np1))
-
-  dimJac = size(JacD(:,i,j))
-  allocate(wvec(wsize+phisize))
-  wvec(1:wsize) = elem(ie)%state%w_i(:,i,j,np1)
-  wvec(wsize+1:wsize+phisize) = elem(ie)%state%phinh_i(:,i,j,np1)
-
-  call compute_andor_apply_rhs(np1,nm1,n0,qn0,1.d0,elem,hvcoord,hybrid,&
+   call compute_andor_apply_rhs(np1,nm1,n0,qn0,1.d0,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,eta_ave_w,1.d0,1.d0,0.d0)
-  ! Form matrix L
+  wsize = size(elem(ie)%state%w_i(:,1,1,np1))
+  phisize = size(elem(ie)%state%phinh_i(:,1,1,np1))
+
+  dimJac = size(JacD(:,1,1))
+  allocate(wvec(wsize+phisize))
   allocate(L(2*dimJac,2*dimJac))
   L = 0.d0
-  do ii=1,dimJac-1
-    L(ii, ii+dimJac) = JacD(ii,i,j) ! Form tridiagonal in upper right
-    L(ii, ii+dimJac+1) = JacU(ii,i,j)
-    L(ii+1, ii+dimJac) = JacL(ii,i,j)
+
+  do i=1,np
+    do j=1,np
+      wvec(1:wsize) = elem(ie)%state%w_i(:,i,j,np1)
+      wvec(wsize+1:wsize+phisize) = elem(ie)%state%phinh_i(:,i,j,np1)
+!      wvec(1+phisize:phisize+wsize) = elem(ie)%state%w_i(:,i,j,np1)
+!      wvec(1:phisize) = elem(ie)%state%phinh_i(:,i,j,np1)
+
+
+  ! Form matrix L
+      do ii=1,dimJac-1
+        L(ii, ii+dimJac) = JacD(ii,i,j) ! Form tridiagonal in upper right
+        L(ii, ii+dimJac+1) = JacU(ii,i,j)
+        L(ii+1, ii+dimJac) = JacL(ii,i,j)
     
-    L(ii+dimJac,ii) = 1.d0 ! Form identity in lower left
-  end do
-  L(dimJac, 2*dimJac) = JacD(dimJac,i,j)
-  L(2*dimJac, dimJac) = 1.d0
-  L = g*L
+        L(ii+dimJac,ii) = 1.d0 ! Form identity in lower left
+      end do
+      L(dimJac, 2*dimJac) = JacD(dimJac,i,j)
+      L(2*dimJac, dimJac) = 1.d0
+      L = g*L
   
-  wvec = matmul(L,wvec) ! Calculate linear part
+      wvec = matmul(L,wvec) ! Calculate linear part
 
   ! subtract linear part
-  elem(ie)%state%w_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) - wvec(1:wsize)
-  elem(ie)%state%phinh_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) - wvec(wsize+1:wsize+phisize)
-
+      elem(ie)%state%w_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) - wvec(1:wsize)
+      elem(ie)%state%phinh_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) - wvec(wsize+1:wsize+phisize)
+ !     elem(ie)%state%w_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) - wvec(1+phisize:phisize+wsize)
+ !     elem(ie)%state%phinh_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) - wvec(1:phisize)
+    end do
+  end do
   end subroutine
 
 
