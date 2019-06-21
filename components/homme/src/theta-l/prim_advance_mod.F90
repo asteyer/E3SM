@@ -25,7 +25,7 @@ module prim_advance_mod
   use element_mod,        only: element_t
   use element_state,      only: max_itercnt_perstep,avg_itercnt,max_itererr_perstep, nu_scale_top
   use element_ops,        only: get_temperature, set_theta_ref, state0, get_R_star
-  use eos,                only: pnh_and_exner_from_eos,phi_from_eos,get_dirk_jacobian
+  use eos,                only: pnh_and_exner_from_eos,phi_from_eos,get_dirk_jacobian, get_exp_jacobian
   use hybrid_mod,         only: hybrid_t
   use hybvcoord_mod,      only: hvcoord_t
   use kinds,              only: iulog, real_kind
@@ -92,7 +92,24 @@ contains
 
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
     integer :: n,i,j,maxiter
- 
+ ! New variables that I am adding.
+    real (kind=real_kind), dimension(:), allocatable :: wvec, ump1, h1, h2
+    real (kind=real_kind) :: tm, tmp1
+    real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
+    real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
+    real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
+    real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
+    real (kind=real_kind), pointer, dimension(:,:,:)   :: vtheta_dp
+    real (kind=real_kind), pointer, dimension(:,:)   :: phis
+    real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
+    real (kind=real_kind) :: JacU(nlev-1,np,np)
+    real (kind=real_kind) :: pnh(np,np,nlev)     ! nh (nonydro) pressure
+    real (kind=real_kind) :: dp3d_i(np,np,nlevp)
+    real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
+    real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
+
+    real (kind=real_kind) :: dphi(nlev)
+    integer :: wsize, phisize
 
     call t_startf('prim_advance_exp')
     nm1   = tl%nm1
@@ -456,12 +473,8 @@ contains
 
 !===================================================================================
     elseif (tstep_type == 11) then ! Integrating factor method
-! New variables that I am adding.
-      real (kind=real_kind), dimension(:), allocatable :: wvec
-      real (kind=real_kind) :: h1, h2, tm, tmp1
-
       a1 = 1.d0 ! Coefficient in RK method
-
+     
       do ie=nets,nete
         w_n0 => elem(ie)%state%w_i(:,:,:,np1)
         phi_n0 => elem(ie)%state%phinh_i(:,:,:,np1)
@@ -475,6 +488,8 @@ contains
         call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
         do i=1,np
           do j=1,np
+            wsize = size(elem(ie)%state%w_i(:,i,j,np1))
+            phisize = size(elem(ie)%state%w_i(:,i,j,np1))
 
             dp3d_i(:,:,1) = dp3d(:,:,1)
             dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
@@ -484,18 +499,39 @@ contains
 
       ! here's the call to the exact Jacobian
             call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-            allocate(wvec(2*size(JacD)))
-            wvec(1:size(w_n0) = w_n0
-            wvec(1+size(w_0)) = phi_n0
-            call matrix_exponential(JacL(:,i,j)*tm,JacD(:,i,j)*tm,JacU(:,i,j)*tm,expJ,h1,wvec) ! not sure which np index i should use for Jac
-            call matrix_exponential(JacL(:,i,j)*(tm+a1*dt2),JacD(:,i,j)*(tm+a1*dt2), JacU(:,i,j)*(tm+a1*dt2), expJ, h2, wvec)
-            call compute_N(h1)
-            call matrix_exponential(a1*dt2*JacL(:,i,j),a1*dt2*JacD(:,i,j),a1*dt2*JacU(:,i,j),expJ,h1,h1)
-            h2 = h2 + a1*dt2*h1
-            call matrix_exponential(Jacl(:,i,j)*tmp1, JacD(:,i,j)*tmp1,JacU(:,i,j)*tmp1, expJ, ump1, wvec) ! This makes more sense, but doesn't match notes. Need to check.
-            call compute_N(h2)
-            call matrix_exponential(dt2*JacL(:,i,j), dt2*JacD(:,i,j), dt2*JacU(:,i,j),expJ, h2, h2)
-            ump1 = ump1 + dt2*h2
+            call compute_nonlinear_rhs(n0,n0,np1,qn0,elem,hvcoord,hybrid,& 
+               deriv,nets,nete,compute_diagnostics,eta_ave_w,ie,i,j, JacL, JacD, JacU)  !stores N(h1) in elem(n0)
+            ! Compute u_m + alpha*dt2*N(h1) and stores it in elem(n0)
+            elem(ie)%state%dp3d(:,:,:,n0) = elem(ie)%state%dp3d(:,:,:,n0) * dt2 + elem(ie)%state%dp3d(:,:,:,np1) 
+            elem(ie)%state%w_i(:,:,:,n0) = elem(ie)%state%w_i(:,:,:,n0) *dt2 + elem(ie)%state%w_i(:,:,:,np1) 
+            elem(ie)%state%phinh_i(:,:,:,n0) = elem(ie)%state%phinh_i(:,:,:,n0)*dt2+ elem(ie)%state%phinh_i(:,:,:,np1) 
+            elem(ie)%state%vtheta_dp(:,:,:,n0) =elem(ie)%state%vtheta_dp(:,:,:,n0)*dt2+ elem(ie)%state%vtheta_dp(:,:,:,np1) 
+            elem(ie)%state%phis(:,:) =elem(ie)%state%phis(:,:)*dt2+ elem(ie)%state%phis(:,:)
+            
+            ! grabs wvec for linear operation
+            allocate(wvec(wsize+phisize))
+            wvec(1:wsize) = elem(ie)%state%w_i(:,i,j,n0)
+            wvec(1+wsize:wsize+phisize) = elem(ie)%state%phinh_i(:,i,j,n0)
+            
+            call matrix_exponential(JacL(:,i,j)*tm,JacD(:,i,j)*tm,JacU(:,i,j)*tm,h2,(wvec+dt2*h1)) ! = h2
+            ! need to store h2 in elem to put it into compute nonlinear rhs
+            elem(ie)%state%w_i(:,i,j,n0) = wvec(1:wsize)
+            elem(ie)%state%phinh_i(:,i,j,n0) = wvec(1+wsize:wsize+phisize)
+            ! grab wvec from u_m to use in next calculation
+            wvec(1:wsize) = elem(ie)%state%w_i(:,i,j,np1)
+            wvec(wsize+1:wsize+phisize) = elem(ie)%state%phinh_i(:,i,j,np1)
+ 
+            call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
+               deriv,nets,nete,compute_diagnostics,eta_ave_w,ie,i,j, JacL, JacD, JacU) ! Computes N(h2) and stores it in elem(np1)
+            elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2
+            elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) *dt2
+            elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1)*dt2
+            elem(ie)%state%vtheta_dp(:,:,:,np1) =elem(ie)%state%vtheta_dp(:,:,:,np1)*dt2
+            elem(ie)%state%phis(:,:) =elem(ie)%state%phis(:,:)*dt2
+ 
+            call matrix_exponential(dt2*JacL(:,i,j),dt2*JacD(:,i,j),dt2*JacU(:,i,j),h1,wvec) ! compute matrix exponential with wvec from u_m
+            elem(ie)%state%w_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) + wvec(1:wsize)
+            elem(ie)%state%phinh_i(:,i,j,np1) = elem(ie)%state%phinh_i(:,i,j,np1) + wvec(wsize+1:wsize+phisize) ! update elem with e^Lt*wvec
           end do 
         end do
       end do
@@ -2201,7 +2237,56 @@ contains
 
   end subroutine compute_andor_apply_rhs
 
+  subroutine compute_nonlinear_rhs(np1,nm1,n0,qn0,elem,hvcoord,hybrid,&
+       deriv,nets,nete,compute_diagnostics,eta_ave_w,ie,i,j, JacL, JacD, JacU)
+  integer,              intent(in) :: np1,nm1,n0,qn0,nets,nete, ie,i,j
+  real (kind=real_kind), dimension(:,:,:), intent(in) :: JacL, JacD, JacU
+  logical,              intent(in) :: compute_diagnostics
+  type (hvcoord_t),     intent(in) :: hvcoord
+  type (hybrid_t),      intent(in) :: hybrid
+  type (element_t),     intent(inout), target :: elem(:)
+  type (derivative_t),  intent(in) :: deriv
 
+  real (kind=real_kind) :: eta_ave_w,scale1,scale2,scale3  ! weighting for eta_dot_dpdn mean flux, scale of unm1
+
+
+  ! local variables
+  real (kind=real_kind), dimension(:), allocatable :: wvec
+  real (kind=real_kind), dimension(:,:), allocatable :: L
+  real (kind=real_kind) :: g = 9.80616d0
+  integer :: ii, dimJac, wsize, phisize
+
+  wsize = size(elem(ie)%state%w_i(:,i,j,np1))
+  phisize = size(elem(ie)%state%phinh_i(:,i,j,np1))
+
+  dimJac = size(JacD(:,i,j))
+  allocate(wvec(wsize+phisize))
+  wvec(1:wsize) = elem(ie)%state%w_i(:,i,j,np1)
+  wvec(wsize+1:wsize+phisize) = elem(ie)%state%phinh_i(:,i,j,np1)
+
+  call compute_andor_apply_rhs(np1,nm1,n0,qn0,1.d0,elem,hvcoord,hybrid,&
+       deriv,nets,nete,compute_diagnostics,eta_ave_w,1.d0,1.d0,0.d0)
+  ! Form matrix L
+  allocate(L(2*dimJac,2*dimJac))
+  L = 0.d0
+  do ii=1,dimJac-1
+    L(ii, ii+dimJac) = JacD(ii,i,j) ! Form tridiagonal in upper right
+    L(ii, ii+dimJac+1) = JacU(ii,i,j)
+    L(ii+1, ii+dimJac) = JacL(ii,i,j)
+    
+    L(ii+dimJac,ii) = 1.d0 ! Form identity in lower left
+  end do
+  L(dimJac, 2*dimJac) = JacD(dimJac,i,j)
+  L(2*dimJac, dimJac) = 1.d0
+  L = g*L
+  
+  wvec = matmul(L,wvec) ! Calculate linear part
+
+  ! subtract linear part
+  elem(ie)%state%w_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) - wvec(1:wsize)
+  elem(ie)%state%phinh_i(:,i,j,np1) = elem(ie)%state%w_i(:,i,j,np1) - wvec(wsize+1:wsize+phisize)
+
+  end subroutine
 
 
  
@@ -2254,8 +2339,6 @@ contains
 
   real (kind=real_kind) :: Jac2D(nlev,np,np)  , Jac2L(nlev-1,np,np)
   real (kind=real_kind) :: Jac2U(nlev-1,np,np)
-
-  real (kind=real_kind) :: dphi(nlev)
 
   integer :: i,j,k,l,ie,itercount,info(np,np),itercountmax
   integer :: nsafe
@@ -2393,11 +2476,11 @@ contains
   end subroutine compute_stage_value_dirk
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(JacL, JacD, JacU, expJ, expResult, w)
+  subroutine matrix_exponential(JacL, JacD, JacU, expResult, w, expJ)
   real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
-  real (kind=real_kind), dimension(:,:), allocatable, intent(out), target :: expJ
+  real (kind=real_kind), dimension(:,:), allocatable, intent(out), optional :: expJ
   real (kind=real_kind), dimension(:), allocatable, intent(out) :: expResult
-  real (kind=real_kind), dimension(:), intent(inout) :: w 
+  real (kind=real_kind), dimension(:), intent(in) :: w 
   ! local
   real (kind=real_kind), allocatable, dimension(:,:) :: N, D, Aj, negAj, Jac,&
     Dinv, iden, DinvN, Tri
@@ -2642,12 +2725,5 @@ contains
 
   end subroutine get_DinvN
 !===========================================================================================================
-  subroutine compute_N(h)
-  real (kind=real_kind), intent(inout) :: h
-
-  !To do: figure out how to compute N(h)
-
-
-  end subroutine
 
 end module prim_advance_mod
