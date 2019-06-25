@@ -361,7 +361,7 @@ contains
   w(2) = 1.d0
 
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU, expProduct, w, approxexpJac)
+  call matrix_exponential(JacL*g, JacD*g, JacU*g, expProduct, w, approxexpJac)
   
   allocate(exactExp(8,8))
   exactExp = (0.d0, 0.d0)
