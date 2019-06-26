@@ -480,7 +480,7 @@ contains
       allocate(u_m_wphivec(2*nlev,np,np))
       u_m_wphivec = 0.d0
       call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
-          deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL, JacD, JacU)  !stores N(h1) in elem(np1)
+          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)  !stores N(h1) in elem(np1)
       do ie = nets,nete
        ! Compute alpha*dt2*N(h1) + u_m and stores it in elem(np1)
         elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2 + elem(ie)%state%dp3d(:,:,:,n0) 
@@ -508,7 +508,7 @@ contains
         end do 
       end do
       call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL, JacD, JacU) ! Computes N(h2) and stores it in elem(nm1)
+         deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU) ! Computes N(h2) and stores it in elem(nm1)
       do ie = nets,nete
         elem(ie)%state%dp3d(:,:,:,nm1) = elem(ie)%state%dp3d(:,:,:,nm1) * dt2
         elem(ie)%state%vtheta_dp(:,:,:,nm1) = elem(ie)%state%vtheta_dp(:,:,:,nm1) * dt2
@@ -1667,6 +1667,7 @@ contains
         enddo
         enddo
         enddo
+        
      endif
 #endif
 
