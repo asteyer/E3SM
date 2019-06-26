@@ -529,6 +529,49 @@ contains
         elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,n0) + elem(ie)%state%dp3d(:,:,:,nm1)
         elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,n0) + elem(ie)%state%v(:,:,:,:,nm1)
       end do
+!==========================================================================================================
+    elseif (tstep_type == 12) then ! IMKG232b with a call to compute_nonlinear_rhs
+      a1 = 1d0/2d0
+      a2 = 1d0/2d0
+      a3 = 1d0
+      ahat3 = 1d0
+      dhat2 = .5d0*(2d0+sqrt(2d0))
+      dhat1 = dhat2
+      ahat2 = -(1d0+sqrt(2d0))/2d0
+
+      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt*a1,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)  
+
+      maxiter=10
+      itertol=1e-12
+      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
+        deriv,nets,nete,maxiter,itertol)
+      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
+      max_itererr_perstep = max(itertol,max_itererr_perstep)
+
+      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a2,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat2/a2,1d0)
+
+      maxiter=10
+      itertol=1e-12
+      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
+        deriv,nets,nete,maxiter,itertol) 
+      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
+      max_itererr_perstep = max(itertol,max_itererr_perstep)
+
+
+      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a3,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
+
+      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
+
+     call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,&
+          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)  !stores N(h1) in elem(np1)
+
+     call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+       deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU) 
+
+
     else
       call abortmp('ERROR: bad choice of tstep_type')
     endif
@@ -1659,10 +1702,12 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
-              write(iulog,*) 'WARNING: before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
-              write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
-              write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
+           if (scale3.ne.0d0) then
+             if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
+                write(iulog,*) 'WARNING: before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
+                write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
+                write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
+             endif
            endif
         enddo
         enddo
@@ -2213,11 +2258,13 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g) then
-              write(iulog,*) 'WARNING: after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
-              write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
-              write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)
-           endif
+           if (scale3.ne.0d0) then
+             if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g) then
+                write(iulog,*) 'WARNING: after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
+                write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
+                write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)
+             endif
+           end if
         enddo
         enddo
         enddo
@@ -2241,7 +2288,6 @@ contains
 
   real (kind=real_kind) :: eta_ave_w ! weighting for eta_dot_dpdn mean flux
 
-
   ! local variables
   real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
   real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
@@ -2256,12 +2302,12 @@ contains
 
   call compute_andor_apply_rhs(np1,nm1,n0,qn0,1.d0,elem,hvcoord,hybrid,&
      deriv,nets,nete,compute_diagnostics,eta_ave_w,1.d0,1.d0,0.d0)
-  stop "made it here - any errors?"
+!  stop "made it here - any errors?"
   do ie = nets,nete
    ! approximate the initial error of f(x) \approx 0
-    dp3d  => elem(ie)%state%dp3d(:,:,:,np1)
-    vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,np1)
-    phi_np1 => elem(ie)%state%phinh_i(:,:,:,np1)
+    dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
+    vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+    phi_np1 => elem(ie)%state%phinh_i(:,:,:,n0)
 
     call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
 
@@ -2269,7 +2315,7 @@ contains
     call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
 
     dimJac = size(JacD(:,1,1))
-    allocate(wphivec(2*nlev))
+ !   allocate(wphivec(2*nlev))
     allocate(L(2*dimJac,2*dimJac))
     L = 0.d0
 
