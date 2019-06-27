@@ -93,7 +93,7 @@ contains
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
     integer :: n,i,j,maxiter
  ! New variables that I am adding.
-    real (kind=real_kind), dimension(:), allocatable :: wphivec, mywphivec
+    real (kind=real_kind) :: wphivec(2*nlev), mywphivec(2*nlev)
     real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
     real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
     real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
@@ -107,7 +107,6 @@ contains
     real (kind=real_kind) :: dp3d_i(np,np,nlevp)
     real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
     real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
-    real (kind=real_kind), dimension(:,:,:), allocatable :: u_m_wphivec
     real (kind=real_kind) :: dphi(nlev)
 
     call t_startf('prim_advance_exp')
@@ -473,42 +472,48 @@ contains
 !===================================================================================
     elseif (tstep_type == 11) then ! Integrating factor method
       a1 = 1.d0 ! Coefficient in RK method
-      allocate(wphivec(2*nlev))
-      wphivec = 0.d0
-      allocate(mywphivec(2*nlev))
-      mywphivec = 0.d0
-      allocate(u_m_wphivec(2*nlev,np,np))
-      u_m_wphivec = 0.d0
-      call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
-          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)  !stores N(h1) in elem(np1)
+
+      ! get Jacobian
       do ie = nets,nete
-       ! Compute alpha*dt2*N(h1) + u_m and stores it in elem(np1)
+        dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1 => elem(ie)%state%phinh_i(:,:,:,n0)
+      end do
+      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+      call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+
+      ! Compute N(u_m) and store in np1
+      call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
+          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
+  
+      ! Compute alpha*dt2*N(u_m) + u_m and store in np1
+      do ie = nets,nete
         elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2 + elem(ie)%state%dp3d(:,:,:,n0) 
         elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) * dt2 + elem(ie)%state%w_i(:,:,:,n0) 
         elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1) * dt2 + elem(ie)%state%phinh_i(:,:,:,n0) 
         elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) * dt2 + elem(ie)%state%vtheta_dp(:,:,:,n0) 
         elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) * dt2 + elem(ie)%state%v(:,:,:,:,n0)        
 
+        ! Compute e^(dt2*Jac)(u_m+alpha*dt2*N(u_m)) =: h2
         do i = 1,np
           do j = 1,np
-       ! grabs wphivec for linear operation
+            ! grabs w and phi for linear operation
             wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,np1)
             wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
-             
-            call matrix_exponential(JacL(:,i,j) * dt2,JacD(:,i,j) * dt2,JacU(:,i,j) * dt2,mywphivec,wphivec, expJ) ! = h2 update for wphivec
+            call matrix_exponential(JacL(:,i,j) * dt2,JacD(:,i,j) * dt2,JacU(:,i,j) * dt2,nlev,mywphivec,wphivec, expJ)
             wphivec = mywphivec
-            ! need to store h2 in elem to put it into compute nonlinear rhs
+            ! update w and phi after matrix exponential 
             elem(ie)%state%w_i(i,j,1:nlev,np1) = wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
-           
-            ! grab wphivec from u_m to use in next calculation
-            u_m_wphivec(1:nlev,i,j) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-            u_m_wphivec(nlev+1:2*nlev,i,j) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
           end do
         end do 
       end do
+
+      ! Compute N(h2) and store in nm1
       call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU) ! Computes N(h2) and stores it in elem(nm1)
+         deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
+ 
+      ! Compute N(h2)*dt2 and store in nm1
       do ie = nets,nete
         elem(ie)%state%dp3d(:,:,:,nm1) = elem(ie)%state%dp3d(:,:,:,nm1) * dt2
         elem(ie)%state%vtheta_dp(:,:,:,nm1) = elem(ie)%state%vtheta_dp(:,:,:,nm1) * dt2
@@ -517,18 +522,23 @@ contains
         elem(ie)%state%phinh_i(:,:,:,nm1) = elem(ie)%state%phinh_i(:,:,:,nm1) * dt2
         do i = 1,np
           do j = 1,np
-            wphivec(1:nlev) = u_m_wphivec(1:nlev,i,j)
-            wphivec(1 + nlev:2*nlev ) = u_m_wphivec(1 + nlev:2*nlev ,i,j) 
-            call matrix_exponential(dt2 * JacL(:,i,j),dt2 * JacD(:,i,j),dt2 * JacU(:,i,j),mywphivec,wphivec, expJ) ! compute matrix exponential with wphivec from u_m
+            ! grabs w and phi for linear operation
+            wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+            wphivec(1 + nlev:2*nlev ) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+            call matrix_exponential(dt2 * JacL(:,i,j),dt2 * JacD(:,i,j),dt2 * JacU(:,i,j),nlev,mywphivec,wphivec, expJ)
             wphivec = mywphivec
+            ! update w and phi after matrix exponential and store in np1 
+            ! (h3 = e^(dt2*Jac)(u_m) + N(h2))
             elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,nm1) + wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,nm1) + wphivec(1+nlev:2*nlev)
           end do 
         end do
+        ! Compute h3 = e^(dt2*Jac)(u_m)+N(h2) for the rest of elem%state
         elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,n0) + elem(ie)%state%vtheta_dp(:,:,:,nm1)
         elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,n0) + elem(ie)%state%dp3d(:,:,:,nm1)
         elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,n0) + elem(ie)%state%v(:,:,:,:,nm1)
       end do
+
 !==========================================================================================================
     elseif (tstep_type == 12) then ! IMKG232b with a call to compute_nonlinear_rhs
       a1 = 1d0/2d0
@@ -2279,7 +2289,7 @@ contains
   subroutine compute_nonlinear_rhs(np1,nm1,n0,qn0,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL, JacD, JacU)
   integer,              intent(in) :: np1,nm1,n0,qn0,nets,nete
-  real (kind=real_kind), intent(out) :: JacL(nlev-1,np,np), JacD(nlev,np,np), JacU(nlev-1,np,np)
+  real (kind=real_kind), intent(in) :: JacL(nlev-1,np,np), JacD(nlev,np,np), JacU(nlev-1,np,np)
   logical,              intent(in) :: compute_diagnostics
   type (hvcoord_t),     intent(in) :: hvcoord
   type (hybrid_t),      intent(in) :: hybrid
@@ -2289,53 +2299,30 @@ contains
   real (kind=real_kind) :: eta_ave_w ! weighting for eta_dot_dpdn mean flux
 
   ! local variables
-  real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
-  real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
-  real (kind=real_kind), pointer, dimension(:,:,:)   :: vtheta_dp
-  real (kind=real_kind), dimension(:), allocatable :: wphivec
-  real (kind=real_kind), dimension(:,:), allocatable :: L
+  real (kind=real_kind) :: wphivec(2*nlev)
+  real (kind=real_kind) :: L(2*nlev, 2*nlev)
   real (kind=real_kind) :: g = 9.80616d0
-  integer :: ii, dimJac, i,j,k,ie
-  real (kind=real_kind) :: pnh(np,np,nlev)     ! nh (nonydro) pressure
-  real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
-  real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
+  integer :: ii, i,j,k,ie
 
   call compute_andor_apply_rhs(np1,nm1,n0,qn0,1.d0,elem,hvcoord,hybrid,&
      deriv,nets,nete,compute_diagnostics,eta_ave_w,1.d0,1.d0,0.d0)
-!  stop "made it here - any errors?"
   do ie = nets,nete
-   ! approximate the initial error of f(x) \approx 0
-    dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
-    vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-    phi_np1 => elem(ie)%state%phinh_i(:,:,:,n0)
-
-    call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-
-      ! here's the call to the exact Jacobian
-    call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-
-    dimJac = size(JacD(:,1,1))
- !   allocate(wphivec(2*nlev))
-    allocate(L(2*dimJac,2*dimJac))
-    L = 0.d0
-
-  
     do i=1,np
       do j=1,np
         wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,np1)
         wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
 
   ! Form matrix L
-        do ii=1,dimJac-1
-          L(ii, ii+dimJac) = JacD(ii,i,j) ! Form tridiagonal in upper right
-          L(ii, ii+dimJac+1) = JacU(ii,i,j)
-          L(ii+1, ii+dimJac) = JacL(ii,i,j)
+        do ii=1,nlev-1
+          L(ii, ii+nlev) = JacD(ii,i,j) ! Form tridiagonal in upper right
+          L(ii, ii+nlev+1) = JacU(ii,i,j)
+          L(ii+1, ii+nlev) = JacL(ii,i,j)
     
-!!        L(ii+dimJac,ii) = 1.d0 ! Form identity in lower left
-          L(ii+dimJac,ii) = g ! Form identity in lower left
+!!        L(ii+nlev,ii) = 1.d0 ! Form identity in lower left
+          L(ii+nlev,ii) = g ! Form identity in lower left
         end do
-        L(dimJac, 2*dimJac) = JacD(dimJac,i,j)
-        L(2*dimJac, dimJac) = g
+        L(nlev, 2*nlev) = JacD(nlev,i,j)
+        L(2*nlev, nlev) = g
 !      L = g*L
  
         wphivec = matmul(L,wphivec) ! Calculate linear part
@@ -2536,11 +2523,12 @@ contains
   end subroutine compute_stage_value_dirk
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(JacL, JacD, JacU, expResult, w, expJ)
+  subroutine matrix_exponential(JacL, JacD, JacU, dimDiag, expResult, w, expJ)
 
   real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
+  integer, intent(in) :: dimDiag
   real (kind=real_kind), dimension(:,:), allocatable, intent(out) :: expJ
-  real (kind=real_kind), dimension(:), allocatable, intent(out) :: expResult
+  real (kind=real_kind), intent(out) :: expResult(2*dimDiag)
   real (kind=real_kind), dimension(:), intent(in) :: w 
   ! local
   real (kind=real_kind), allocatable, dimension(:,:) :: N, D, Aj, negAj, Jac,&
@@ -2548,24 +2536,23 @@ contains
   real (kind=real_kind), allocatable, dimension(:) :: work
   integer, allocatable, dimension(:) :: ipiv
   real (kind=real_kind) normJ, pfac, fac, g, alpha
-  integer i,j,p,info, maxiter, k, dimJac, halfdim
+  integer i,j,p,info, maxiter, k, dimJac 
 
   g = 9.80616d0 
   p = 2          ! parameter used in diagonal Pade approximation
   pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
   ! Initialize random A and normalize
-  halfdim = size(JacD)
-  dimJac = 2*halfdim
+  dimJac = 2*dimDiag
   allocate(Jac(dimJac, dimJac))
   Jac = 0.d0
-  do i = 1,(halfdim-1)
-    Jac(i,(i+halfdim)) = JacD(i)
-    Jac(i,(i+1+halfdim)) = JacU(i)
-    Jac((i+1),(i+halfdim)) = JacL(i) 
+  do i = 1,(dimDiag-1)
+    Jac(i,(i+dimDiag)) = JacD(i)
+    Jac(i,(i+1+dimDiag)) = JacU(i)
+    Jac((i+1),(i+dimDiag)) = JacL(i) 
   enddo
-  Jac(halfdim, dimJac) = JacD(halfdim)
-  do i = 1,halfdim
-    Jac(i + halfdim,i) = g
+  Jac(dimDiag, dimJac) = JacD(dimDiag)
+  do i = 1,dimDiag
+    Jac(i + dimDiag,i) = g
   end do
 !  Jac = Jac * g
   ! Scaling by power of 2
@@ -2576,15 +2563,15 @@ contains
     k = k + 1
   end do ! end while loop
 
-  allocate(Tri(halfdim, halfdim))
+  allocate(Tri(dimDiag, dimDiag))
   Tri = 0.d0
-  do i = 1, (halfdim-1)
-    Tri(i,i) = Jac(i,(i+halfdim))
-    Tri(i,i+1) = Jac(i,(i+1+halfdim))
-    Tri(i+1,i) = Jac((i+1),(i+halfdim))
+  do i = 1, (dimDiag-1)
+    Tri(i,i) = Jac(i,(i+dimDiag))
+    Tri(i,i+1) = Jac(i,(i+1+dimDiag))
+    Tri(i+1,i) = Jac((i+1),(i+dimDiag))
   end do
-  Tri(halfdim, halfdim) = Jac(halfdim, dimJac)
-  alpha = Jac((halfdim + 1), 1)
+  Tri(dimDiag, dimDiag) = Jac(dimDiag, dimJac)
+  alpha = Jac((dimDiag + 1), 1)
 
   ! Initialize Aj,negAj = identity and N,D = 0.
   allocate(N(dimJac, dimJac))
@@ -2633,8 +2620,6 @@ contains
     expJ = matmul(expJ, expJ)
 !    DinvN = matmul(DinvN, DinvN)
   end do
-  allocate(expResult(dimJac))
-  expResult = 0.d0
   expResult = matmul(expJ, w)
 !  print *, "___________________________________"
 !  print *, "w ", w

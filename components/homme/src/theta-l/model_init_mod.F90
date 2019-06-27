@@ -225,7 +225,8 @@ contains
   ! local
   real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac, &
     exactExp, factor, factorInv, D
-  real (kind=real_kind), dimension(:), allocatable :: work, JacL, JacU, JacD, w, expProduct
+  real (kind=real_kind), dimension(:), allocatable :: work, JacL, JacU, JacD, w
+  real (kind=real_kind) :: expProduct(10)
   integer, dimension(10) :: ipiv
   real (kind = real_kind) :: error, g
   integer :: n, info
@@ -255,7 +256,7 @@ contains
   w(3) = 1.d0
 
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU,expProduct, w, approxexpJac)
+  call matrix_exponential(JacL, JacD, JacU,5,expProduct, w, approxexpJac)
   
   allocate(exactExp(10,10))
   exactExp = 0.d0
@@ -334,7 +335,8 @@ contains
   real (kind=real_kind), dimension(:,:), allocatable :: approxexpJac
   complex*16, dimension(:,:), allocatable :: factor, factorInv, exactExp, D
   complex*16, dimension(:), allocatable :: work
-  real (kind=real_kind), dimension(:), allocatable :: JacL, JacU, JacD, w, expProduct
+  real (kind=real_kind), dimension(:), allocatable :: JacL, JacU, JacD, w
+  real (kind=real_kind) :: expProduct(8)
   integer, dimension(8) :: ipiv
   real (kind = real_kind) :: error, g
   integer :: n, info
@@ -361,7 +363,7 @@ contains
   w(2) = 1.d0
 
   ! Rational approximation
-  call matrix_exponential(JacL*g, JacD*g, JacU*g, expProduct, w, approxexpJac)
+  call matrix_exponential(JacL*g, JacD*g, JacU*g,4, expProduct, w, approxexpJac)
   
   allocate(exactExp(8,8))
   exactExp = (0.d0, 0.d0)
