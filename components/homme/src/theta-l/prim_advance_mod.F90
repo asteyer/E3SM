@@ -93,14 +93,14 @@ contains
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
     integer :: n,i,j,maxiter
  ! New variables that I am adding.
-    real (kind=real_kind) :: wphivec(2*nlev), mywphivec(2*nlev)
+    real (kind=real_kind) :: wphivec(2*nlev)
     real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
     real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
     real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
     real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
     real (kind=real_kind), pointer, dimension(:,:,:)   :: vtheta_dp
     real (kind=real_kind), pointer, dimension(:,:)   :: phis
-    real (kind=real_kind), dimension(:,:), allocatable :: expJ
+    real (kind=real_kind) :: expJ(2*nlev, 2*nlev)
     real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
     real (kind=real_kind) :: JacU(nlev-1,np,np)
     real (kind=real_kind) :: pnh(np,np,nlev)     ! nh (nonydro) pressure
@@ -485,7 +485,8 @@ contains
       ! Compute N(u_m) and store in np1
       call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
           deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
-  
+   !   print *, "**************************************"
+   !   print *, "N(h1) is computed and stored in np1" 
       ! Compute alpha*dt2*N(u_m) + u_m and store in np1
       do ie = nets,nete
         elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2 + elem(ie)%state%dp3d(:,:,:,n0) 
@@ -500,8 +501,7 @@ contains
             ! grabs w and phi for linear operation
             wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,np1)
             wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
-            call matrix_exponential(JacL(:,i,j) * dt2,JacD(:,i,j) * dt2,JacU(:,i,j) * dt2,nlev,mywphivec,wphivec, expJ)
-            wphivec = mywphivec
+            call matrix_exponential(JacL(:,i,j) * dt2,JacD(:,i,j) * dt2,JacU(:,i,j) * dt2,nlev,wphivec, expJ)
             ! update w and phi after matrix exponential 
             elem(ie)%state%w_i(i,j,1:nlev,np1) = wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
@@ -509,36 +509,38 @@ contains
         end do 
       end do
 
-      ! Compute N(h2) and store in nm1
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+      ! Compute N(h2) and store in np1
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
- 
-      ! Compute N(h2)*dt2 and store in nm1
+!      print *, "**************************************"
+!      print *, "N(h2) is computed and stored in np1" 
+     
+      ! Compute N(h2)*dt2 and store in np1
       do ie = nets,nete
-        elem(ie)%state%dp3d(:,:,:,nm1) = elem(ie)%state%dp3d(:,:,:,nm1) * dt2
-        elem(ie)%state%vtheta_dp(:,:,:,nm1) = elem(ie)%state%vtheta_dp(:,:,:,nm1) * dt2
-        elem(ie)%state%v(:,:,:,:,nm1) = elem(ie)%state%v(:,:,:,:,nm1) * dt2
-        elem(ie)%state%w_i(:,:,:,nm1) = elem(ie)%state%w_i(:,:,:,nm1) * dt2
-        elem(ie)%state%phinh_i(:,:,:,nm1) = elem(ie)%state%phinh_i(:,:,:,nm1) * dt2
+        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2
+        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) * dt2
+        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) * dt2
+        elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) * dt2
+        elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1) * dt2
         do i = 1,np
           do j = 1,np
             ! grabs w and phi for linear operation
             wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
             wphivec(1 + nlev:2*nlev ) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-            call matrix_exponential(dt2 * JacL(:,i,j),dt2 * JacD(:,i,j),dt2 * JacU(:,i,j),nlev,mywphivec,wphivec, expJ)
-            wphivec = mywphivec
+            call matrix_exponential(dt2 * JacL(:,i,j),dt2 * JacD(:,i,j),dt2 * JacU(:,i,j),nlev,wphivec, expJ)
             ! update w and phi after matrix exponential and store in np1 
             ! (h3 = e^(dt2*Jac)(u_m) + N(h2))
-            elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,nm1) + wphivec(1:nlev)
-            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,nm1) + wphivec(1+nlev:2*nlev)
+            elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) + wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,np1) + wphivec(1+nlev:2*nlev)
           end do 
         end do
         ! Compute h3 = e^(dt2*Jac)(u_m)+N(h2) for the rest of elem%state
-        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,n0) + elem(ie)%state%vtheta_dp(:,:,:,nm1)
-        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,n0) + elem(ie)%state%dp3d(:,:,:,nm1)
-        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,n0) + elem(ie)%state%v(:,:,:,:,nm1)
+        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,n0) + elem(ie)%state%vtheta_dp(:,:,:,np1)
+        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,n0) + elem(ie)%state%dp3d(:,:,:,np1)
+        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,n0) + elem(ie)%state%v(:,:,:,:,np1)
       end do
-
+      print *, "*****************************************"
+      print *, " Successfully made it through first time step." 
 !==========================================================================================================
     elseif (tstep_type == 12) then ! IMKG232b with a call to compute_nonlinear_rhs
       a1 = 1d0/2d0
@@ -2523,18 +2525,17 @@ contains
   end subroutine compute_stage_value_dirk
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(JacL, JacD, JacU, dimDiag, expResult, w, expJ)
+  subroutine matrix_exponential(JacL, JacD, JacU, dimDiag, w, expJ)
 
   real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
   integer, intent(in) :: dimDiag
-  real (kind=real_kind), dimension(:,:), allocatable, intent(out) :: expJ
-  real (kind=real_kind), intent(out) :: expResult(2*dimDiag)
-  real (kind=real_kind), dimension(:), intent(in) :: w 
+  real (kind=real_kind), intent(out) :: expJ(2*dimDiag, 2*dimDiag)
+  real (kind=real_kind), dimension(:), intent(inout) :: w 
   ! local
-  real (kind=real_kind), allocatable, dimension(:,:) :: N, D, Aj, negAj, Jac,&
-    Dinv, iden, DinvN, Tri
-  real (kind=real_kind), allocatable, dimension(:) :: work
-  integer, allocatable, dimension(:) :: ipiv
+  real (kind=real_kind) :: N(2*dimDiag,2*dimDiag), D(2*dimDiag,2*dimDiag), Aj(2*dimDiag,2*dimDiag), negAj(2*dimDiag,2*dimDiag), Jac(2*dimDiag,2*dimDiag), &
+    Dinv(2*dimDiag,2*dimDiag), iden(2*dimDiag,2*dimDiag), DinvN(2*dimDiag,2*dimDiag), Tri(dimDiag,dimDiag)
+  real (kind=real_kind) :: work(2*dimDiag)
+  integer :: ipiv(2*dimDiag)
   real (kind=real_kind) normJ, pfac, fac, g, alpha
   integer i,j,p,info, maxiter, k, dimJac 
 
@@ -2543,13 +2544,12 @@ contains
   pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
-  allocate(Jac(dimJac, dimJac))
   Jac = 0.d0
   do i = 1,(dimDiag-1)
     Jac(i,(i+dimDiag)) = JacD(i)
     Jac(i,(i+1+dimDiag)) = JacU(i)
     Jac((i+1),(i+dimDiag)) = JacL(i) 
-  enddo
+  end do
   Jac(dimDiag, dimJac) = JacD(dimDiag)
   do i = 1,dimDiag
     Jac(i + dimDiag,i) = g
@@ -2563,7 +2563,6 @@ contains
     k = k + 1
   end do ! end while loop
 
-  allocate(Tri(dimDiag, dimDiag))
   Tri = 0.d0
   do i = 1, (dimDiag-1)
     Tri(i,i) = Jac(i,(i+dimDiag))
@@ -2572,26 +2571,16 @@ contains
   end do
   Tri(dimDiag, dimDiag) = Jac(dimDiag, dimJac)
   alpha = Jac((dimDiag + 1), 1)
-
   ! Initialize Aj,negAj = identity and N,D = 0.
-  allocate(N(dimJac, dimJac))
   N = 0.d0
-  allocate(D(dimJac, dimJac))
   D = 0.d0
-  allocate(Aj(dimJac, dimJac))
   Aj = 0.d0
-  allocate(negAj(dimJac, dimJac))
   negAj = 0.d0
-  allocate(Dinv(dimJac, dimJac))
   Dinv = 0.d0
-  allocate(iden(dimJac, dimJac))
   iden = 0.d0
-  allocate(expJ(dimJac, dimJac))
   expJ = 0.d0
 
-  allocate(work(dimJac))
   work = 0.d0
-  allocate(ipiv(dimJac))
   ipiv = 0
 
   do i = 1,dimJac
@@ -2610,8 +2599,8 @@ contains
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 2) ! using tridiagonal solves
-!  call get_DinvN(p, D, N, DinvN, Tri, alpha, 1)  ! using full LU factorization
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
+!  call get_DinvN(p, D, N, DinvN, Tri, alpha, 1,dimJac)  ! using full LU factorization
 !  print *, "----------test------------------"
 !  print *, " diff in methods ", norm2(DinvN- expJ)
 !  print *, "-------------------------------"
@@ -2620,29 +2609,28 @@ contains
     expJ = matmul(expJ, expJ)
 !    DinvN = matmul(DinvN, DinvN)
   end do
-  expResult = matmul(expJ, w)
+  w = matmul(expJ, w)
 !  print *, "___________________________________"
 !  print *, "w ", w
 !  print *, "expJ ", expJ
-!  print *, "expProduct ", expResult
+!  print *, "expProduct ", w
 
   end subroutine matrix_exponential
 
-  subroutine get_DinvN(p, D, N, DinvN, Tri, alph, opt)
+  subroutine get_DinvN(p, D, N, DinvN, Tri, alph, opt,dimJac)
   real (kind=real_kind), dimension(:,:), intent(in) :: D, N, Tri
   integer, intent(in) :: p, opt
-  real (kind=real_kind), dimension(:,:), allocatable, intent(out), target :: DinvN
+  real (kind=real_kind), intent(out), target :: DinvN(dimJac,dimJac)
   real (kind=real_kind), intent(in):: alph
  
   ! local variables
   complex*16 sig1, sig2, sig1Inv, sig2Inv, kfac, alpha
   integer :: block_dim, dimJac, info, i
-  integer, dimension(:), allocatable :: ipiv
-  complex*16, dimension(:), allocatable :: work, TriD, TriL, TriU
-  complex*16, dimension(:,:), allocatable :: B, X1, X2, N1, N2, myTri
+  integer :: ipiv(dimJac)
+  complex*16 :: work(dimJac), TriD(dimJac/2), TriL(dimJac/2 - 1), TriU(dimJac/2 - 1)
+  complex*16 :: B(dimJac/2,dimJac), X1(dimJac/2,dimJac), X2(dimJac/2,dimJac), N1(dimJac/2,dimJac), N2(dimJac/2,dimJac), myTri(dimJac/2,dimJac/2)
 
   alpha = dcmplx(alph)
-  dimJac = size(D,1)
   block_dim = dimJac/2
   kfac = (12.d0, 0.d0)
   sig1 = dcmplx(3.d0,sqrt(3.d0))
@@ -2651,14 +2639,11 @@ contains
   sig2Inv = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
 
   ! Invert matrix D
-    allocate(DinvN(dimJac, dimJac))
     DinvN = 0.d0
  
   if (opt == 1) then  ! Calculate inverse using full LU decomp
     DinvN = D
-    allocate(work(dimJac))
     work = 0.d0
-    allocate(ipiv(dimJac))
     ipiv = 0
     call DGETRF(dimJac, dimJac, DinvN, dimJac, ipiv, info)
     call DGETRI(dimJac, DinvN, dimJac, ipiv, work, dimJac, info)
@@ -2669,23 +2654,16 @@ contains
     if (p /= 2) then
       stop 'Must have p = 2 approximation' ! Factoring done by hand - only for p=2
     end if
-    allocate(X1(block_dim, dimJac)) ! Partition into block system
     X1 = 0.d0
-    allocate(X2(block_dim,dimJac))
     X2 = 0.d0
-    allocate(N1(block_dim, dimJac))
     N1 = 0.d0
     N1 = dcmplx(N(1:block_dim, 1:dimJac))
-    allocate(N2(block_dim, dimJac))
     N2 = 0.d0
     N2 = dcmplx(N(block_dim+1:dimJac, 1:dimJac))
 ! sig1I-Jac is not nice to invert. We left multiply by (I& 0\\ gsig1InvI& I) so
 ! that we can solve the triangular system 
 ! (-g^2sig1InvTri + sig1I)X2 = (gsig1InvN1+N2)  and back substitute to get
 ! X1 = sig1Inv(N1+gTriX2)
-    allocate(TriD(block_dim))
-    allocate(TriU(block_dim-1))
-    allocate(TriL(block_dim-1))
     do i = 1,block_dim-1
       TriD(i) = dcmplx(Tri(i,i),0.d0)
       TriL(i) = dcmplx(Tri(i+1,i),0.d0)
@@ -2703,7 +2681,6 @@ contains
     end do
 
     ! for testing purposes
-    allocate(myTri(block_dim, block_dim))
     myTri = 0.d0
     do i = 1,block_dim-1
       myTri(i,i) = TriD(i)
@@ -2712,7 +2689,6 @@ contains
     end do
     myTri(block_dim, block_dim) = TriD(block_dim)
 
-    allocate(B(block_dim,dimJac))
     B = 0.d0
     B = (kfac*(alpha*sig1Inv*N1 + N2))
     call ZGTSV(block_dim, dimJac, TriL, TriD, TriU, B, block_dim, info)
