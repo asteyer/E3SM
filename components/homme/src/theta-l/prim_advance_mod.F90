@@ -485,7 +485,6 @@ contains
     elseif (tstep_type == 11) then ! Integrating factor method
       a1 = 1.d0 ! Coefficient in RK method
       ! TO DO: add generic RK coefficients to method.
-
       ! get Jacobian
       do ie = nets,nete
         dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
@@ -500,19 +499,25 @@ contains
           deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
       ! Compute alpha*dt2*N(u_m) + u_m and store in np1
       do ie = nets,nete
-        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2 + elem(ie)%state%dp3d(:,:,:,n0) 
-        elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) * dt2 + elem(ie)%state%w_i(:,:,:,n0) 
-        elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1) * dt2 + elem(ie)%state%phinh_i(:,:,:,n0) 
-        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) * dt2 + elem(ie)%state%vtheta_dp(:,:,:,n0) 
-        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) * dt2 + elem(ie)%state%v(:,:,:,:,n0)        
 
+!        print *, "***********Before computation****************"
+!        print *, ie, elem(ie)%state%w_i(:,:,:,np1)*dt
+        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt + elem(ie)%state%dp3d(:,:,:,n0) 
+        elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) * dt + elem(ie)%state%w_i(:,:,:,n0) 
+        elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1) * dt + elem(ie)%state%phinh_i(:,:,:,n0) 
+        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) * dt + elem(ie)%state%vtheta_dp(:,:,:,n0) 
+        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) * dt + elem(ie)%state%v(:,:,:,:,n0)        
+!        print *, "**********After computation****************"
+!        print *, ie, elem(ie)%state%w_i(:,:,:,np1)
         ! Compute e^(dt2*Jac)(u_m+alpha*dt2*N(u_m)) =: h2
         do i = 1,np
           do j = 1,np
             ! grabs w and phi for linear operation
             wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,np1)
             wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
-            call matrix_exponential(JacL(:,i,j) * dt2,JacD(:,i,j) * dt2,JacU(:,i,j) * dt2,nlev,wphivec, expJ)
+!            print *, "********************************"
+!            print *, ie, elem(ie)%state%w_i(i,j,:,np1)
+            call matrix_exponential(JacL(:,i,j) * dt,JacD(:,i,j) * dt,JacU(:,i,j) * dt,nlev,wphivec, expJ)
             ! update w and phi after matrix exponential 
             elem(ie)%state%w_i(i,j,1:nlev,np1) = wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
@@ -526,17 +531,17 @@ contains
      
       ! Compute N(h2)*dt2 and store in np1
       do ie = nets,nete
-        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2
-        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) * dt2
-        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) * dt2
-        elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) * dt2
-        elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1) * dt2
+        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt
+        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) * dt
+        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) * dt
+        elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) * dt
+        elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1) * dt
         do i = 1,np
           do j = 1,np
             ! grabs w and phi for linear operation
             wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
             wphivec(1 + nlev:2*nlev ) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-            call matrix_exponential(dt2 * JacL(:,i,j),dt2 * JacD(:,i,j),dt2 * JacU(:,i,j),nlev,wphivec, expJ)
+            call matrix_exponential(dt * JacL(:,i,j),dt * JacD(:,i,j),dt * JacU(:,i,j),nlev,wphivec, expJ)
             ! update w and phi after matrix exponential and store in np1 
             ! (h3 = e^(dt2*Jac)(u_m) + N(h2))
             elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) + wphivec(1:nlev)
@@ -2626,13 +2631,13 @@ contains
 
   subroutine get_DinvN(p, D, N, DinvN, Tri, alph, opt,dimJac)
   real (kind=real_kind), dimension(:,:), intent(in) :: D, N, Tri
-  integer, intent(in) :: p, opt
+  integer, intent(in) :: p, opt, dimJac
   real (kind=real_kind), intent(out), target :: DinvN(dimJac,dimJac)
   real (kind=real_kind), intent(in):: alph
  
   ! local variables
   complex*16 sig1, sig2, sig1Inv, sig2Inv, kfac, alpha
-  integer :: block_dim, dimJac, info, i
+  integer :: block_dim, info, i
   integer :: ipiv(dimJac)
   complex*16 :: work(dimJac), TriD(dimJac/2), TriL(dimJac/2 - 1), TriU(dimJac/2 - 1)
   complex*16 :: B(dimJac/2,dimJac), X1(dimJac/2,dimJac), X2(dimJac/2,dimJac), N1(dimJac/2,dimJac), N2(dimJac/2,dimJac), myTri(dimJac/2,dimJac/2)
