@@ -378,29 +378,29 @@ implicit none
         ! add special cases for k==1 and k==nlev+1
         if (k==1) then
 
-           JacL(k,:,:) = g*pnh(:,:,k)/&
+           JacL(k,:,:) = pnh(:,:,k)/&
              ((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)*dp3d_i(:,:,k+1))
 
-           JacU(k,:,:) = 2 * g * pnh(:,:,k)/&
+           JacU(k,:,:) = 2 * pnh(:,:,k)/&
              ((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)*dp3d_i(:,:,k))
 
-           JacD(k,:,:) = - 2*g *pnh(:,:,k)/&
+           JacD(k,:,:) = - 2 *pnh(:,:,k)/&
              ((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)*dp3d_i(:,:,k))
           
         else if (k.eq.nlev) then 
 
-           JacD(k,:,:) = -g *(pnh(:,:,k)/((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)) &
+           JacD(k,:,:) = -(pnh(:,:,k)/((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)) &
              +pnh(:,:,k-1)/( (phi_i(:,:,k-1)-phi_i(:,:,k))*(1-kappa)))/dp3d_i(:,:,k)
 
         else ! k =2,...,nlev-1
 
-           JacL(k,:,:) = g*pnh(:,:,k)/&
+           JacL(k,:,:) = pnh(:,:,k)/&
              ((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)*dp3d_i(:,:,k+1))
          
-           JacU(k,:,:) = g * pnh(:,:,k)/&
+           JacU(k,:,:) =  pnh(:,:,k)/&
              ((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)*dp3d_i(:,:,k))
 
-           JacD(k,:,:) = - g *(pnh(:,:,k)/((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)) &
+           JacD(k,:,:) = - (pnh(:,:,k)/((phi_i(:,:,k)-phi_i(:,:,k+1))*(1-kappa)) &
              +pnh(:,:,k-1)/( (phi_i(:,:,k-1)-phi_i(:,:,k))*(1-kappa)))/dp3d_i(:,:,k)
 
         end if
@@ -421,15 +421,15 @@ implicit none
          call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i_temp,pnh,exner,dpnh_dp_i_epsie)
         end if
         if (k.eq.1) then
-          JacL(k,:,:) = -g * (dpnh_dp_i(:,:,k+1)-dpnh_dp_i_epsie(:,:,k+1))/epsie
-          JacD(k,:,:) = -g * (dpnh_dp_i(:,:,k)-dpnh_dp_i_epsie(:,:,k))/epsie
+          JacL(k,:,:) = -(dpnh_dp_i(:,:,k+1)-dpnh_dp_i_epsie(:,:,k+1))/epsie
+          JacD(k,:,:) = -(dpnh_dp_i(:,:,k)-dpnh_dp_i_epsie(:,:,k))/epsie
         elseif (k.eq.nlev) then
-          JacD(k,:,:)   = -g * (dpnh_dp_i(:,:,k)-dpnh_dp_i_epsie(:,:,k))/epsie
-          JacU(k-1,:,:) = -g * (dpnh_dp_i(:,:,k-1)-dpnh_dp_i_epsie(:,:,k-1))/epsie
+          JacD(k,:,:)   = -(dpnh_dp_i(:,:,k)-dpnh_dp_i_epsie(:,:,k))/epsie
+          JacU(k-1,:,:) = -(dpnh_dp_i(:,:,k-1)-dpnh_dp_i_epsie(:,:,k-1))/epsie
         else
-          JacL(k,:,:)   = -g * (dpnh_dp_i(:,:,k+1)-dpnh_dp_i_epsie(:,:,k+1))/epsie
-          JacD(k,:,:)   = -g * (dpnh_dp_i(:,:,k)-dpnh_dp_i_epsie(:,:,k))/epsie
-          JacU(k-1,:,:) = -g * (dpnh_dp_i(:,:,k-1)-dpnh_dp_i_epsie(:,:,k-1))/epsie
+          JacL(k,:,:)   = -(dpnh_dp_i(:,:,k+1)-dpnh_dp_i_epsie(:,:,k+1))/epsie
+          JacD(k,:,:)   = -(dpnh_dp_i(:,:,k)-dpnh_dp_i_epsie(:,:,k))/epsie
+          JacU(k-1,:,:) = -(dpnh_dp_i(:,:,k-1)-dpnh_dp_i_epsie(:,:,k-1))/epsie
         end if
       end do
     end if
