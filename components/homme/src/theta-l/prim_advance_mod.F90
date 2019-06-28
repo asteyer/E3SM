@@ -88,7 +88,10 @@ contains
     real (kind=real_kind) :: dt2, time, dt_vis, x, eta_ave_w
     real (kind=real_kind) :: itertol,a1,a2,a3,a4,a5,a6,ahat1,ahat2
     real (kind=real_kind) :: ahat3,ahat4,ahat5,ahat6,dhat1,dhat2,dhat3,dhat4
-    real (kind=real_kind) ::  gamma,delta
+    real (kind=real_kind) ::  gamma,delta,alphahat,betahat,b1
+    real (kind=real_kind) :: statesave1(np,np,nlevp,nets:nete,6),statesave2(np,np,nlevp,nets:nete,6)
+    real (kind=real_kind) :: statesave3(np,np,nlevp,nets:nete,6),statesave4(np,np,nlevp,nets:nete,6)
+
 
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
     integer :: n,i,j,maxiter
@@ -455,6 +458,98 @@ contains
       avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
 
 !===================================================================================
+!===================================================================================
+    elseif (tstep_type == 11 ) then ! stage parallel imex
+      a1 = 0.25d0
+      b1 = 1d0
+      a2 = -0.5d0
+      a3 = 1d0
+
+      dhat1 = 1d0
+      dhat2 = 1d0
+      ahat2 = 1d0
+      alphahat = 2d0
+      betahat = -1d0
+
+      ! copy un0 to unm1
+      call copy_state(statesave1,statesave1,elem,3,1d0,1d0,nm1,n0,n0,nets,nete)
+
+   !******************* Can be done in parallel ************************
+      ! compute and store un + dt*a1*n(un=g1) at np1
+      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt*a1,elem,hvcoord,hybrid,&
+        deriv,nets,nete,.false.,0d0,1d0,0d0,1d0)
+
+      ! solve for g3 = un + dt*dhat2*s(g3) and store at nm1
+      maxiter=10
+      itertol=1e-12
+      call compute_stage_value_dirk(nm1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
+        deriv,nets,nete,maxiter,itertol)
+      max_itercnt_perstep = max(maxiter,max_itercnt_perstep)
+      max_itererr_perstep = max(itertol,max_itererr_perstep)
+   !********************************************************************
+   ! copy un + dt*a1*n1 at np1 to statesave1
+   call copy_state(statesave1,statesave1,elem,1,1d0,1d0,np1,np1,np1,nets,nete)
+
+   !********************************************************************
+   ! g3 is at nm1, un+dt*a1*n1 is at np1 and statesave1, and un0 is at n0
+   !********************************************************************
+
+   !******************* Can be done in parallel ************************
+   ! solve for g2 = un + dt*a1*n1+dt*dhat1*s2 and store at np1
+      maxiter=10
+      itertol=1e-12
+      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
+        deriv,nets,nete,maxiter,itertol)
+      max_itercnt_perstep = max(maxiter,max_itercnt_perstep)
+      max_itererr_perstep = max(itertol,max_itererr_perstep)
+
+   ! compute s3 = (g3-un0)/(dhat2*dt) and store at statesave3, noting that g3 is at elem(nm1) and un is at elem(n0)
+   call copy_state(statesave3,statesave3,elem,7,1d0/(dhat2*dt),-1d0/(dhat2*dt),nm1,n0,n0,nets,nete)
+   !********************************************************************
+
+   ! compute s2 = (g2 - un - dt*a1*n1)/(dt*dhat1) = (elem(np1)-statesave1)/(dt*dhat1) and store at statesave2
+   call copy_state(statesave2,statesave1,elem,6,1d0/(dhat1*dt),-1d0/(dhat1*dt),np1,np1,np1,nets,nete)
+
+   !********************************************************************
+   ! s2 is at statesave2, s3 is at statesave3, un0 is at n0,  g2 is at np1, and g3 is at nm1
+   !********************************************************************
+
+   !******************* Can be done in parallel ************************
+   ! compute n2 at store at np1
+   call compute_andor_apply_rhs(np1,n0,np1,qn0,1d0,elem,hvcoord,hybrid,&
+     deriv,nets,nete,.false.,0d0,1d0,0d0,0d0)
+
+   ! compute n3 and store at nm1
+   call compute_andor_apply_rhs(nm1,n0,nm1,qn0,1d0,elem,hvcoord,hybrid,&
+     deriv,nets,nete,.false.,0d0,1d0,0d0,0d0)
+   !********************************************************************
+   !********************************************************************
+   ! s2 is at statesave2, s3 is at statesave3, un0 is at n0,  n2 is at np1, and n3 is at nm1
+   !********************************************************************
+   ! g4 = um + dt*b1*n2 + dt*a2*n3 + dt*ahat2*s3
+   ! first compute um + dt*a2*n3 and store at nm1
+   call copy_state(statesave1,statesave1,elem,5,1d0,a2*dt,nm1,n0,nm1,nets,nete)
+   ! next compute um + dt*a2*n3 + dt*b1*n2 and store at nm1
+   call copy_state(statesave1,statesave1,elem,5,1d0,b1*dt,nm1,nm1,np1,nets,nete)
+   ! finally compute um + dt*a2*n3+dt*b1*n2 + dt*ahat2*s3 and store at nm1
+   call copy_state(statesave3,statesave3,elem,4,1d0,ahat2*dt,nm1,nm1,nm1,nets,nete)
+
+
+   !*******************************************************************
+   ! s2 is at statesave2, s3 is at statesave3, un0 is at n0,  n2 is at np1, and g4 is at nm1
+   !*******************************************************************
+   ! form g5 = un + dt*aphat*s2+dt*betahat*s3+(dt*a3*n4+dt*ahat3*s4)
+   ! compute un + dt*a3*n4+dt*ahat3*s4 and store at np1
+   call compute_andor_apply_rhs(np1,n0,nm1,qn0,dt,elem,hvcoord,hybrid,&
+     deriv,nets,nete,.false.,0d0,a3,ahat3,1d0)
+   ! compute un + dt*a3*n4+dt*ahat3*s4 + dt*aphat*s2 and store at np1
+   call copy_state(statesave2,statesave2,elem,4,1d0,alphahat*dt,np1,np1,np1,nets,nete)
+   ! compute un + dt*a3*n4+dt*ahat3*s4 + dt*aphat*s2 + dt*betahat*s3 and store at np1
+   call copy_state(statesave3,statesave3,elem,4,1d0,betahat*dt,np1,np1,np1,nets,nete)
+
+   ! done since g5 = unp1 is at np1
+
+
     else
        call abortmp('ERROR: bad choice of tstep_type')
     endif
@@ -1587,7 +1682,7 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
+           if (((phi_i(i,j,k)-phi_i(i,j,k+1)) < g).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING: before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
               write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
               write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
@@ -2140,7 +2235,7 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g) then
+           if (((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING: after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
               write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
               write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)
@@ -2380,7 +2475,7 @@ contains
         elem(ie)%state%vtheta_dp(:,:,1:nlev,n1) = state1(:,:,1:nlev,ie,5)
         elem(ie)%state%dp3d(:,:,1:nlev,n1)      = state1(:,:,1:nlev,ie,6)
       end do
-    elseif (par.eq.3) then ! copy element to element
+    elseif (par.eq.3) then ! copy element to element 
       do ie=nets,nete
         elem(ie)%state%v(:,:,1,1:nlev,n1)       = elem(ie)%state%v(:,:,1,1:nlev,n2)
         elem(ie)%state%v(:,:,2,1:nlev,n1)       = elem(ie)%state%v(:,:,2,1:nlev,n2)
@@ -2403,10 +2498,8 @@ contains
         elem(ie)%state%v(:,:,1,1:nlev,n1)       = a1*elem(ie)%state%v(:,:,1,1:nlev,n2) + a2*elem(ie)%state%v(:,:,1,1:nlev,n3)
         elem(ie)%state%v(:,:,2,1:nlev,n1)       = a1*elem(ie)%state%v(:,:,2,1:nlev,n2) + a2*elem(ie)%state%v(:,:,2,1:nlev,n3)
         elem(ie)%state%w_i(:,:,1:nlevp,n1)      = a1*elem(ie)%state%w_i(:,:,1:nlevp,n2) + a2*elem(ie)%state%w_i(:,:,1:nlevp,n3)
-        elem(ie)%state%phinh_i(:,:,1:nlevp,n1)  = a1*elem(ie)%state%phinh_i(:,:,1:nlevp,n2) + a2*elem(ie)%state%phinh_i(:,:,1:nlevp\
-,n3)
-        elem(ie)%state%vtheta_dp(:,:,1:nlev,n1) = a1*elem(ie)%state%vtheta_dp(:,:,1:nlev,n2) + a2*elem(ie)%state%vtheta_dp(:,:,1:nl\
-ev,n3)
+        elem(ie)%state%phinh_i(:,:,1:nlevp,n1)  = a1*elem(ie)%state%phinh_i(:,:,1:nlevp,n2) + a2*elem(ie)%state%phinh_i(:,:,1:nlevp,n3)
+        elem(ie)%state%vtheta_dp(:,:,1:nlev,n1) = a1*elem(ie)%state%vtheta_dp(:,:,1:nlev,n2) + a2*elem(ie)%state%vtheta_dp(:,:,1:nlev,n3)
         elem(ie)%state%dp3d(:,:,1:nlev,n1)      = a1*elem(ie)%state%dp3d(:,:,1:nlev,n2) + a2*elem(ie)%state%dp3d(:,:,1:nlev,n3)
       end do
     elseif (par.eq.6) then ! copy element+state to state
