@@ -466,12 +466,25 @@ contains
 
       call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a3,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
+      ! Testing nonlinear_rhs
+       ! get Jacobian
+      do ie = nets,nete
+        dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1 => elem(ie)%state%phinh_i(:,:,:,n0)
+      end do
+      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+      call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+     
+      call compute_nonlinear_rhs(nm1,nm1,n0,qn0,elem,hvcoord,hybrid,&
+          deriv,nets,nete,compute_diagnostics,0.d0,JacL,JacD,JacU)
 
       avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
 
 !===================================================================================
     elseif (tstep_type == 11) then ! Integrating factor method
       a1 = 1.d0 ! Coefficient in RK method
+      ! TO DO: add generic RK coefficients to method.
 
       ! get Jacobian
       do ie = nets,nete
@@ -485,8 +498,6 @@ contains
       ! Compute N(u_m) and store in np1
       call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
           deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
-   !   print *, "**************************************"
-   !   print *, "N(h1) is computed and stored in np1" 
       ! Compute alpha*dt2*N(u_m) + u_m and store in np1
       do ie = nets,nete
         elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt2 + elem(ie)%state%dp3d(:,:,:,n0) 
@@ -512,8 +523,6 @@ contains
       ! Compute N(h2) and store in np1
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
-!      print *, "**************************************"
-!      print *, "N(h2) is computed and stored in np1" 
      
       ! Compute N(h2)*dt2 and store in np1
       do ie = nets,nete
@@ -526,7 +535,7 @@ contains
           do j = 1,np
             ! grabs w and phi for linear operation
             wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-            wphivec(1 + nlev:2*nlev ) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+            wphivec(1 + nlev:2*nlev ) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
             call matrix_exponential(dt2 * JacL(:,i,j),dt2 * JacD(:,i,j),dt2 * JacU(:,i,j),nlev,wphivec, expJ)
             ! update w and phi after matrix exponential and store in np1 
             ! (h3 = e^(dt2*Jac)(u_m) + N(h2))
@@ -539,8 +548,6 @@ contains
         elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,n0) + elem(ie)%state%dp3d(:,:,:,np1)
         elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,n0) + elem(ie)%state%v(:,:,:,:,np1)
       end do
-      print *, "*****************************************"
-      print *, " Successfully made it through first time step." 
 !==========================================================================================================
     elseif (tstep_type == 12) then ! IMKG232b with a call to compute_nonlinear_rhs
       a1 = 1d0/2d0
@@ -2311,10 +2318,12 @@ contains
   do ie = nets,nete
     do i=1,np
       do j=1,np
+
         wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,np1)
         wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
 
   ! Form matrix L
+        L = 0.d0
         do ii=1,nlev-1
           L(ii, ii+nlev) = JacD(ii,i,j) ! Form tridiagonal in upper right
           L(ii, ii+nlev+1) = JacU(ii,i,j)
@@ -2326,9 +2335,7 @@ contains
         L(nlev, 2*nlev) = JacD(nlev,i,j)
         L(2*nlev, nlev) = g
 !      L = g*L
- 
         wphivec = matmul(L,wphivec) ! Calculate linear part
-
   ! subtract linear part
         elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) - wphivec(1:nlev)
         elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,np1) - wphivec(1+nlev:2*nlev)
