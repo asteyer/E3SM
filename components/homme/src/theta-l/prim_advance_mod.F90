@@ -477,7 +477,7 @@ contains
       call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
      
       call compute_nonlinear_rhs(nm1,nm1,n0,qn0,elem,hvcoord,hybrid,&
-          deriv,nets,nete,compute_diagnostics,0.d0,JacL,JacD,JacU)
+          deriv,nets,nete,compute_diagnostics,0.d0,JacL,JacD,JacU, dt)
 
       avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
 
@@ -485,74 +485,88 @@ contains
     elseif (tstep_type == 11) then ! Integrating factor method
       a1 = 1.d0 ! Coefficient in RK method
       ! TO DO: add generic RK coefficients to method.
+
       ! get Jacobian
       do ie = nets,nete
-        dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
         vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1 => elem(ie)%state%phinh_i(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
       end do
       call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
       call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-
       ! Compute N(u_m) and store in np1
       call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
-          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
-      ! Compute alpha*dt2*N(u_m) + u_m and store in np1
+          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)
       do ie = nets,nete
-
-!        print *, "***********Before computation****************"
-!        print *, ie, elem(ie)%state%w_i(:,:,:,np1)*dt
-        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt + elem(ie)%state%dp3d(:,:,:,n0) 
-        elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) * dt + elem(ie)%state%w_i(:,:,:,n0) 
-        elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1) * dt + elem(ie)%state%phinh_i(:,:,:,n0) 
-        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) * dt + elem(ie)%state%vtheta_dp(:,:,:,n0) 
-        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) * dt + elem(ie)%state%v(:,:,:,:,n0)        
-!        print *, "**********After computation****************"
-!        print *, ie, elem(ie)%state%w_i(:,:,:,np1)
-        ! Compute e^(dt2*Jac)(u_m+alpha*dt2*N(u_m)) =: h2
+      ! Compute dt*N(u_m) + u_m and store in np1
+        call linear_combination_of_elem(np1,dt,np1,1.d0,n0,elem,ie)
+        ! Compute e^(dt*Jac)(u_m+alpha*dt*N(u_m)) =: h2
         do i = 1,np
           do j = 1,np
             ! grabs w and phi for linear operation
-            wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,np1)
+            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
             wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
 !            print *, "********************************"
 !            print *, ie, elem(ie)%state%w_i(i,j,:,np1)
-            call matrix_exponential(JacL(:,i,j) * dt,JacD(:,i,j) * dt,JacU(:,i,j) * dt,nlev,wphivec, expJ)
+            call matrix_exponential(JacL(:,i,j),JacD(:,i,j),JacU(:,i,j),nlev,dt,wphivec, expJ)
             ! update w and phi after matrix exponential 
-            elem(ie)%state%w_i(i,j,1:nlev,np1) = wphivec(1:nlev)
+            elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
+            if (elem(ie)%state%phinh_i(i,j,1,np1)<elem(ie)%state%phinh_i(i,j,2,np1)) then
+              print *, "**********h_2 errors*************"
+              print *, i, j, ie
+            end if
           end do
         end do 
       end do
 
       ! Compute N(h2) and store in np1
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)
+         deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)
      
-      ! Compute N(h2)*dt2 and store in np1
+      ! Compute N(h2)*dt and store in np1
       do ie = nets,nete
-        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,np1) * dt
-        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,np1) * dt
-        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) * dt
-        elem(ie)%state%w_i(:,:,:,np1) = elem(ie)%state%w_i(:,:,:,np1) * dt
-        elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,np1) * dt
+        call linear_combination_of_elem(np1,dt,np1,0.d0,n0,elem,ie)
         do i = 1,np
           do j = 1,np
+!            if (elem(ie)%state%phinh_i(i,j,1,np1) < elem(ie)%state%phinh_i(i,j,2,np1)) then
+!              print *, "********first test *****************"
+!              print *, ie, i,j
+!            end if
             ! grabs w and phi for linear operation
-            wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+            wphivec(1:nlev)           = elem(ie)%state%w_i(i,j,1:nlev,n0)
             wphivec(1 + nlev:2*nlev ) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-            call matrix_exponential(dt * JacL(:,i,j),dt * JacD(:,i,j),dt * JacU(:,i,j),nlev,wphivec, expJ)
+!!            if (wphivec(1+nlev) < wphivec(2+nlev)) then
+!!              print *, "*************************"
+!!              print *, "wphivec ", wphivec
+!!              stop
+!!            end if
+            call matrix_exponential(JacL(:,i,j),JacD(:,i,j),JacU(:,i,j),nlev,dt,wphivec, expJ)
+!!            if (wphivec(nlev+1) < wphivec(nlev+2)) then
+!!             print *, "**********second test*************"
+!!              print *, "wphivec ", wphivec
+!!            end if
             ! update w and phi after matrix exponential and store in np1 
-            ! (h3 = e^(dt2*Jac)(u_m) + N(h2))
-            elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) + wphivec(1:nlev)
+            ! (h3 = e^(dt*Jac)(u_m) + N(h2))
+            elem(ie)%state%w_i(i,j,1:nlev,np1)     = elem(ie)%state%w_i(i,j,1:nlev,np1) + wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,np1) + wphivec(1+nlev:2*nlev)
+!!            if (elem(ie)%state%phinh_i(i,j,1,np1) < elem(ie)%state%phinh_i(i,j,2,np1)) then
+!!              print *, "****************"
+!!              print *, "phi_i: ", wphivec(1+nlev:2*nlev)
+!!              stop
+!!            end if
           end do 
         end do
-        ! Compute h3 = e^(dt2*Jac)(u_m)+N(h2) for the rest of elem%state
+        ! Compute h3 = e^(dt*Jac)(u_m)+N(h2) for the rest of elem%state
         elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,n0) + elem(ie)%state%vtheta_dp(:,:,:,np1)
-        elem(ie)%state%dp3d(:,:,:,np1) = elem(ie)%state%dp3d(:,:,:,n0) + elem(ie)%state%dp3d(:,:,:,np1)
-        elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,n0) + elem(ie)%state%v(:,:,:,:,np1)
+        elem(ie)%state%dp3d(:,:,:,np1)      = elem(ie)%state%dp3d(:,:,:,n0) + elem(ie)%state%dp3d(:,:,:,np1)
+        elem(ie)%state%v(:,:,:,:,np1)       = elem(ie)%state%v(:,:,:,:,n0) + elem(ie)%state%v(:,:,:,:,np1)
       end do
+!      print *, "**********h_3*************"
+!      do i = 1,nlevp
+!        print *, i, elem(nets)%state%phinh_i(1,1,i,np1)
+!      end do
+
 !==========================================================================================================
     elseif (tstep_type == 12) then ! IMKG232b with a call to compute_nonlinear_rhs
       a1 = 1d0/2d0
@@ -590,10 +604,10 @@ contains
       avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
 
      call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,&
-          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU)  !stores N(h1) in elem(np1)
+          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)  !stores N(h1) in elem(np1)
 
      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU) 
+       deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)
 
 
     else
@@ -2301,7 +2315,7 @@ contains
   end subroutine compute_andor_apply_rhs
 
   subroutine compute_nonlinear_rhs(np1,nm1,n0,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL, JacD, JacU)
+       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL, JacD, JacU,dt)
   integer,              intent(in) :: np1,nm1,n0,qn0,nets,nete
   real (kind=real_kind), intent(in) :: JacL(nlev-1,np,np), JacD(nlev,np,np), JacU(nlev-1,np,np)
   logical,              intent(in) :: compute_diagnostics
@@ -2309,6 +2323,7 @@ contains
   type (hybrid_t),      intent(in) :: hybrid
   type (element_t),     intent(inout), target :: elem(:)
   type (derivative_t),  intent(in) :: deriv
+  real (kind=real_kind), intent(in) :: dt
 
   real (kind=real_kind) :: eta_ave_w ! weighting for eta_dot_dpdn mean flux
 
@@ -2324,8 +2339,8 @@ contains
     do i=1,np
       do j=1,np
 
-        wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,np1)
-        wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
+        wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+        wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
 
   ! Form matrix L
         L = 0.d0
@@ -2334,12 +2349,11 @@ contains
           L(ii, ii+nlev+1) = JacU(ii,i,j)
           L(ii+1, ii+nlev) = JacL(ii,i,j)
     
-!!        L(ii+nlev,ii) = 1.d0 ! Form identity in lower left
-          L(ii+nlev,ii) = g ! Form identity in lower left
+          L(ii+nlev,ii) = 1.d0 ! Form identity in lower left
         end do
         L(nlev, 2*nlev) = JacD(nlev,i,j)
-        L(2*nlev, nlev) = g
-!      L = g*L
+        L(2*nlev, nlev) = 1.d0
+        L = g*dt*L
         wphivec = matmul(L,wphivec) ! Calculate linear part
   ! subtract linear part
         elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) - wphivec(1:nlev)
@@ -2537,22 +2551,34 @@ contains
   end subroutine compute_stage_value_dirk
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(JacL, JacD, JacU, dimDiag, w, expJ)
+  subroutine matrix_exponential(JacL, JacD, JacU, dimDiag, dt, w, expJ)
+  !===================================================================================
+  ! this subroutine calculates the matrix exponential of the matrix of the form
+  !    [ 0       g*dt*T
+  !      g*dt*I       0 ],
+  ! where the tridiagonal matrix T is given by the input vectors JacL, JacD, and JacU
+  !
+  ! This matrix exponential is returned as expJ. The product (e^J)*w is also
+  ! calculated, and returned as w.
+  !===================================================================================
 
   real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
   integer, intent(in) :: dimDiag
+  real (kind=real_kind), intent(in) :: dt
   real (kind=real_kind), intent(out) :: expJ(2*dimDiag, 2*dimDiag)
   real (kind=real_kind), dimension(:), intent(inout) :: w 
-  ! local
-  real (kind=real_kind) :: N(2*dimDiag,2*dimDiag), D(2*dimDiag,2*dimDiag), Aj(2*dimDiag,2*dimDiag), negAj(2*dimDiag,2*dimDiag), Jac(2*dimDiag,2*dimDiag), &
-    Dinv(2*dimDiag,2*dimDiag), iden(2*dimDiag,2*dimDiag), DinvN(2*dimDiag,2*dimDiag), Tri(dimDiag,dimDiag)
+  ! local variables
+  real (kind=real_kind) :: N(2*dimDiag,2*dimDiag), D(2*dimDiag,2*dimDiag), &
+    Aj(2*dimDiag,2*dimDiag), negAj(2*dimDiag,2*dimDiag), Jac(2*dimDiag,2*dimDiag), &
+    Dinv(2*dimDiag,2*dimDiag), iden(2*dimDiag,2*dimDiag), DinvN(2*dimDiag,2*dimDiag),&
+    Tri(dimDiag,dimDiag)
   real (kind=real_kind) :: work(2*dimDiag)
   integer :: ipiv(2*dimDiag)
   real (kind=real_kind) normJ, pfac, fac, g, alpha
   integer i,j,p,info, maxiter, k, dimJac 
 
   g = 9.80616d0 
-  p = 2          ! parameter used in diagonal Pade approximation
+  p = 20  ! parameter used in diagonal Pade approximation
   pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
@@ -2564,9 +2590,9 @@ contains
   end do
   Jac(dimDiag, dimJac) = JacD(dimDiag)
   do i = 1,dimDiag
-    Jac(i + dimDiag,i) = g
+    Jac(i + dimDiag,i) = 1.d0
   end do
-!  Jac = Jac * g
+  Jac = Jac * g * dt
   ! Scaling by power of 2
   maxiter = 10000
   k = 0
@@ -2582,7 +2608,8 @@ contains
     Tri(i+1,i) = Jac((i+1),(i+dimDiag))
   end do
   Tri(dimDiag, dimDiag) = Jac(dimDiag, dimJac)
-  alpha = Jac((dimDiag + 1), 1)
+  alpha = Jac((dimDiag + 1), 1)  ! scalar multiple of identity in lower left
+  Tri = Tri / alpha
   ! Initialize Aj,negAj = identity and N,D = 0.
   N = 0.d0
   D = 0.d0
@@ -2611,7 +2638,7 @@ contains
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac) ! using tridiagonal solves
 !  call get_DinvN(p, D, N, DinvN, Tri, alpha, 1,dimJac)  ! using full LU factorization
 !  print *, "----------test------------------"
 !  print *, " diff in methods ", norm2(DinvN- expJ)
@@ -2621,6 +2648,11 @@ contains
     expJ = matmul(expJ, expJ)
 !    DinvN = matmul(DinvN, DinvN)
   end do
+!  do i = 1,dimJac
+!    if (abs(expJ(23,i)) > 10.d-3) then
+!      print *, "expJ(23,",i,") = ", expJ(23,i)
+!    end if
+!  end do
   w = matmul(expJ, w)
 !  print *, "___________________________________"
 !  print *, "w ", w
@@ -2640,10 +2672,11 @@ contains
   integer :: block_dim, info, i
   integer :: ipiv(dimJac)
   complex*16 :: work(dimJac), TriD(dimJac/2), TriL(dimJac/2 - 1), TriU(dimJac/2 - 1)
-  complex*16 :: B(dimJac/2,dimJac), X1(dimJac/2,dimJac), X2(dimJac/2,dimJac), N1(dimJac/2,dimJac), N2(dimJac/2,dimJac), myTri(dimJac/2,dimJac/2)
+  complex*16 :: B(dimJac/2,dimJac), X1(dimJac/2,dimJac), X2(dimJac/2,dimJac), N1(dimJac/2,dimJac), N2(dimJac/2,dimJac)
 
   alpha = dcmplx(alph)
   block_dim = dimJac/2
+  ! Variables used to factor Pade approximation
   kfac = (12.d0, 0.d0)
   sig1 = dcmplx(3.d0,sqrt(3.d0))
   sig2 = dcmplx(3.d0, (-sqrt(3.d0)))
@@ -2651,7 +2684,7 @@ contains
   sig2Inv = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
 
   ! Invert matrix D
-    DinvN = 0.d0
+  DinvN = 0.d0
  
   if (opt == 1) then  ! Calculate inverse using full LU decomp
     DinvN = D
@@ -2662,7 +2695,7 @@ contains
 
     DinvN = matmul(DinvN, N)
 
-  else
+  else  ! Use triangular solves and back substitution
     if (p /= 2) then
       stop 'Must have p = 2 approximation' ! Factoring done by hand - only for p=2
     end if
@@ -2672,7 +2705,7 @@ contains
     N1 = dcmplx(N(1:block_dim, 1:dimJac))
     N2 = 0.d0
     N2 = dcmplx(N(block_dim+1:dimJac, 1:dimJac))
-! sig1I-Jac is not nice to invert. We left multiply by (I& 0\\ gsig1InvI& I) so
+! sig1I-Jac is not nice to invert. We left multiply by (I& 0\\ g*dt*sig1InvI& I) so
 ! that we can solve the triangular system 
 ! (-g^2sig1InvTri + sig1I)X2 = (gsig1InvN1+N2)  and back substitute to get
 ! X1 = sig1Inv(N1+gTriX2)
@@ -2684,22 +2717,13 @@ contains
    TriD(block_dim) = dcmplx(Tri(block_dim, block_dim), 0.d0)
 
     ! solve for X1 and X2
-    TriD = TriD*(-sig1Inv)*alpha
-    TriL = TriL*(-sig1Inv)*alpha
-    TriU = TriU*(-sig1Inv)*alpha
+    TriD = TriD*(-sig1Inv)*alpha**2
+    TriL = TriL*(-sig1Inv)*alpha**2
+    TriU = TriU*(-sig1Inv)*alpha**2
  
     do i = 1,block_dim
       TriD(i) = TriD(i) + sig1
     end do
-
-    ! for testing purposes
-    myTri = 0.d0
-    do i = 1,block_dim-1
-      myTri(i,i) = TriD(i)
-      myTri(i+1,i) = TriL(i)
-      myTri(i,i+1) = TriU(i)
-    end do
-    myTri(block_dim, block_dim) = TriD(block_dim)
 
     B = 0.d0
     B = (kfac*(alpha*sig1Inv*N1 + N2))
@@ -2707,9 +2731,7 @@ contains
 
 
     X2 = B
-    X1 = sig1Inv * (kfac*N1 + matmul(Tri,X2))
-!    print *, "-----------test2-----------"
-!    print *, matmul(myTri,X2) -( kfac*(g*sig1Inv*N1 + N2))
+    X1 = sig1Inv * (kfac*N1 + alpha*matmul(Tri,X2))
 !    print *, "----------test4-----------"
 !    print *, -alpha*X1 + sig1*X2 - kfac*N2
 ! Now do the second tridiag solve
@@ -2723,21 +2745,12 @@ contains
     TriD(block_dim) = dcmplx(Tri(block_dim, block_dim),0.d0)
 
     ! solve for X1 and X2
-    TriD = TriD*(-sig2Inv)*alpha
-    TriL = TriL*(-sig2Inv)*alpha
-    TriU = TriU*(-sig2Inv)*alpha
+    TriD = TriD*(-sig2Inv)*alpha**2
+    TriL = TriL*(-sig2Inv)*alpha**2
+    TriU = TriU*(-sig2Inv)*alpha**2
  
     do i = 1,block_dim
       TriD(i) = TriD(i) + sig2
-    end do
-
-    ! for testing purposes
-    do i = 1, block_dim
-      myTri(i,i) = myTri(i,i) - sig1
-    end do
-    myTri = myTri * sig2Inv * sig1
-    do i = 1,block_dim
-      myTri(i,i) = myTri(i,i) + sig2
     end do
 
     B = (alpha*sig2Inv*dcmplx(N1) + dcmplx(N2))
@@ -2745,9 +2758,7 @@ contains
     call ZGTSV(block_dim, dimJac, TriL, TriD, TriU, B, block_dim, info)
     X2 = B
 
-    X1 = sig2Inv * (N1 + matmul(Tri,X2))
-!    print *, "-----------test3-----------"
-!    print *, matmul(myTri,X2) -(g*sig2Inv*cmplx(N1) + cmplx(N2))
+    X1 = sig2Inv * (N1 + alpha*matmul(Tri,X2))
 !    print *, "------------test5-----------"
 !    print *, -alpha*X1 + sig2*X2 - N2
     DinvN(1:block_dim, :) = real(X1)
@@ -2758,5 +2769,24 @@ contains
 
   end subroutine get_DinvN
 !===========================================================================================================
+  subroutine linear_combination_of_elem(t3,a1,t1,a2,t2,elem,ie)
+  !===================================================================================
+  ! this subroutine calculates the linear combination a1*elem(t1) + a2*elem(t2)
+  ! and stores it in elem(t3)
+  !
+  ! calculated, and returned as w.
+  !===================================================================================
 
+  real (kind=real_kind), intent(in) :: a1,a2
+  integer, intent(in) :: t1,t2,t3,ie
+  type (element_t), intent(inout), target :: elem(:) 
+
+  elem(ie)%state%dp3d(:,:,:,t3)      = elem(ie)%state%dp3d(:,:,:,t1) * a1      + elem(ie)%state%dp3d(:,:,:,t2) * a2
+  elem(ie)%state%w_i(:,:,1:nlev,t3)       = elem(ie)%state%w_i(:,:,1:nlev,t1) * a1       + elem(ie)%state%w_i(:,:,1:nlev,t2) * a2
+  elem(ie)%state%phinh_i(:,:,1:nlev,t3)   = elem(ie)%state%phinh_i(:,:,1:nlev,t1) * a1   + elem(ie)%state%phinh_i(:,:,1:nlev,t2) * a2
+  elem(ie)%state%vtheta_dp(:,:,:,t3) = elem(ie)%state%vtheta_dp(:,:,:,t1) * a1 + elem(ie)%state%vtheta_dp(:,:,:,t2) *a2
+  elem(ie)%state%v(:,:,:,:,t3)       = elem(ie)%state%v(:,:,:,:,t1) * a1       + elem(ie)%state%v(:,:,:,:,t2) * a2       
+
+
+  end subroutine linear_combination_of_elem
 end module prim_advance_mod
