@@ -609,7 +609,48 @@ contains
      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)
 
+!===================================================================================
+    elseif (tstep_type == 13) then ! Integrating factor method
+      a1 = 1.d0 ! Coefficient in RK method
+      ! TO DO: add generic RK coefficients to method.
 
+      ! get Jacobian
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+      end do
+      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+      call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+      do ie = nets,nete
+        do i = 1,np
+          do j = 1,np
+            ! grabs w and phi for linear operation
+            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,n0)
+            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
+            call matrix_exponential(JacL(:,i,j),JacD(:,i,j),JacU(:,i,j),nlev,dt,wphivec, expJ)
+            ! update w and phi after matrix exponential 
+            call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1, elem, ie)
+            elem(ie)%state%w_i(i,j,1:nlev,nm1)     = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,nm1) = wphivec(1+nlev:2*nlev)
+          end do
+        end do 
+      end do
+
+      ! Compute N(h1) and store in np1
+      call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
+         deriv,nets,nete,.false.,0.d0, JacL, JacD, JacU,dt)
+      do ie = nets,nete
+        call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem, ie) 
+      end do
+      call compute_nonlinear_rhs(np1, np1, np1, qn0, elem, hvcoord,hybrid,&
+        deriv,nets,nete,.false.,0.d0,JacL,JacD,JacU,dt)
+      do ie = nets, nete
+        call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem, ie)
+      end do
+
+!==========================================================================================================
+ 
     else
       call abortmp('ERROR: bad choice of tstep_type')
     endif
@@ -2578,8 +2619,8 @@ contains
   integer i,j,p,info, maxiter, k, dimJac 
 
   g = 9.80616d0 
-  p = 20  ! parameter used in diagonal Pade approximation
-  pfac = gamma(dble(p+1))/gamma(dble(2*p+1))
+  p = 2  ! parameter used in diagonal Pade approximation
+  pfac = gamma(dble(p+1.d0))/gamma(dble(2.d0*p+1.d0))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
   Jac = 0.d0
@@ -2630,15 +2671,15 @@ contains
 
   ! series for Pade approximation
   do i=0,p
-    fac = gamma(dble(2*p-i+1))/(gamma(dble(i+1))*gamma(dble(p-i+1)))*pfac
+    fac = gamma(dble(2.d0*p-i+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(p-i+1.d0)))*pfac
     D = D + fac*negAj
     N = N + fac*Aj
-    negAj = matmul(negAj,(-1.d0)*Jac)
+    negAj = matmul(negAj,-Jac)
     Aj = matmul(Aj,Jac)
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac) ! using tridiagonal solves
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
 !  call get_DinvN(p, D, N, DinvN, Tri, alpha, 1,dimJac)  ! using full LU factorization
 !  print *, "----------test------------------"
 !  print *, " diff in methods ", norm2(DinvN- expJ)
