@@ -103,6 +103,8 @@ contains
     real (kind=real_kind) :: expJ(2*nlev, 2*nlev)
     real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
     real (kind=real_kind) :: JacU(nlev-1,np,np)
+    real (kind=real_kind) :: JacD_elem(nlev,np,np,nete-nets+1)
+    real (kind=real_kind) :: JacL_elem(nlev-1,np,np,nete-nets+1), JacU_elem(nlev-1,np,np,nete-nets+1)
     real (kind=real_kind) :: pnh(np,np,nlev)     ! nh (nonydro) pressure
     real (kind=real_kind) :: dp3d_i(np,np,nlevp)
     real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
@@ -472,12 +474,15 @@ contains
         dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
         vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
         phi_np1 => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL
+        JacU_elem(:,:,:,ie) = JacU
+        JacD_elem(:,:,:,ie) = JacD
+    
       end do
-      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-      call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-     
       call compute_nonlinear_rhs(nm1,nm1,n0,qn0,elem,hvcoord,hybrid,&
-          deriv,nets,nete,compute_diagnostics,0.d0,JacL,JacD,JacU, dt)
+          deriv,nets,nete,compute_diagnostics,0.d0,JacL_elem,JacD_elem,JacU_elem, dt)
 
       avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
 
@@ -491,12 +496,15 @@ contains
         dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
         vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
         phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL
+        JacU_elem(:,:,:,ie) = JacU
+        JacD_elem(:,:,:,ie) = JacD
       end do
-      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-      call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-      ! Compute N(u_m) and store in np1
+     ! Compute N(u_m) and store in np1
       call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
-          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)
+          deriv,nets,nete,compute_diagnostics,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
       do ie = nets,nete
       ! Compute dt*N(u_m) + u_m and store in np1
         call linear_combination_of_elem(np1,dt,np1,1.d0,n0,elem,ie)
@@ -508,7 +516,7 @@ contains
             wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
 !            print *, "********************************"
 !            print *, ie, elem(ie)%state%w_i(i,j,:,np1)
-            call matrix_exponential(JacL(:,i,j),JacD(:,i,j),JacU(:,i,j),nlev,dt,wphivec, expJ)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,wphivec, expJ)
             ! update w and phi after matrix exponential 
             elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
@@ -522,7 +530,7 @@ contains
 
       ! Compute N(h2) and store in np1
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)
+         deriv,nets,nete,compute_diagnostics,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
      
       ! Compute N(h2)*dt and store in np1
       do ie = nets,nete
@@ -541,7 +549,7 @@ contains
 !!              print *, "wphivec ", wphivec
 !!              stop
 !!            end if
-            call matrix_exponential(JacL(:,i,j),JacD(:,i,j),JacU(:,i,j),nlev,dt,wphivec, expJ)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,wphivec, expJ)
 !!            if (wphivec(nlev+1) < wphivec(nlev+2)) then
 !!             print *, "**********second test*************"
 !!              print *, "wphivec ", wphivec
@@ -619,32 +627,34 @@ contains
         dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
         vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
         phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-      end do
-      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-      call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-      do ie = nets,nete
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL
+        JacU_elem(:,:,:,ie) = JacU
+        JacD_elem(:,:,:,ie) = JacD
         do i = 1,np
           do j = 1,np
             ! grabs w and phi for linear operation
             wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,n0)
             wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-            call matrix_exponential(JacL(:,i,j),JacD(:,i,j),JacU(:,i,j),nlev,dt,wphivec, expJ)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,wphivec, expJ)
             ! update w and phi after matrix exponential 
             call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1, elem, ie)
             elem(ie)%state%w_i(i,j,1:nlev,nm1)     = wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,nm1) = wphivec(1+nlev:2*nlev)
           end do
         end do 
+
       end do
 
       ! Compute N(h1) and store in np1
       call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,.false.,0.d0, JacL, JacD, JacU,dt)
+         deriv,nets,nete,.false.,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
       do ie = nets,nete
         call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem, ie) 
       end do
       call compute_nonlinear_rhs(np1, np1, np1, qn0, elem, hvcoord,hybrid,&
-        deriv,nets,nete,.false.,0.d0,JacL,JacD,JacU,dt)
+        deriv,nets,nete,.false.,0.d0,JacL_elem,JacD_elem,JacU_elem,dt)
       do ie = nets, nete
         call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem, ie)
       end do
@@ -2358,7 +2368,7 @@ contains
   subroutine compute_nonlinear_rhs(np1,nm1,n0,qn0,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL, JacD, JacU,dt)
   integer,              intent(in) :: np1,nm1,n0,qn0,nets,nete
-  real (kind=real_kind), intent(in) :: JacL(nlev-1,np,np), JacD(nlev,np,np), JacU(nlev-1,np,np)
+  real (kind=real_kind), intent(in) :: JacL(nlev-1,np,np, nete-nets+1), JacD(nlev,np,np,nete-nets+1), JacU(nlev-1,np,np,nete-nets+1)
   logical,              intent(in) :: compute_diagnostics
   type (hvcoord_t),     intent(in) :: hvcoord
   type (hybrid_t),      intent(in) :: hybrid
@@ -2386,15 +2396,15 @@ contains
   ! Form matrix L
         L = 0.d0
         do ii=1,nlev-1
-          L(ii, ii+nlev) = JacD(ii,i,j) ! Form tridiagonal in upper right
-          L(ii, ii+nlev+1) = JacU(ii,i,j)
-          L(ii+1, ii+nlev) = JacL(ii,i,j)
+          L(ii, ii+nlev) = JacD(ii,i,j,ie) ! Form tridiagonal in upper right
+          L(ii, ii+nlev+1) = JacU(ii,i,j,ie)
+          L(ii+1, ii+nlev) = JacL(ii,i,j,ie)
     
           L(ii+nlev,ii) = 1.d0 ! Form identity in lower left
         end do
-        L(nlev, 2*nlev) = JacD(nlev,i,j)
+        L(nlev, 2*nlev) = JacD(nlev,i,j,ie)
         L(2*nlev, nlev) = 1.d0
-        L = g*dt*L
+        L = g*L
         wphivec = matmul(L,wphivec) ! Calculate linear part
   ! subtract linear part
         elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) - wphivec(1:nlev)
