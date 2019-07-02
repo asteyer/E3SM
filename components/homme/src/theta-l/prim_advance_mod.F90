@@ -623,8 +623,8 @@ contains
       a1 = 1.d0 ! Coefficient in RK method
       ! TO DO: add generic RK coefficients to method.
 
-      ! get Jacobian
       do ie = nets,nete
+      ! get Jacobian
         dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
         vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
         phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
@@ -652,18 +652,8 @@ contains
       call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
          deriv,nets,nete,.false.,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
 
-
-
-
-
-
-
-
-
-
-
       !!!!!!! Test nonlinear rhs
-      ! - we have u stored in nm1; N(u) stored in np1; F(u) stored in n0
+      ! - we have u stored in nm1; N(u) stored in np1; now we calculate F(u) and store in n0
       call compute_andor_apply_rhs(n0,nm1,nm1,qn0,1.d0,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,0.d0,1.d0,1.d0,0.d0)
       do ie = nets, nete
@@ -696,25 +686,27 @@ contains
               stop
             end if
             if (norm2(elem(ie)%state%phinh_i(i,j,1:nlev,np1)) > 10.d-5) then
-              print *, " phi error is ", (norm2(elem(ie)%state%phinh_i(i,j,1:nlev,np1)) > 10.d-5)
+              print *, " phi error is ", norm2(elem(ie)%state%phinh_i(i,j,1:nlev,np1)) 
               stop
             end if
-          end do
+            if (norm2(elem(ie)%state%dp3d(i,j,:,np1)) > 10.d-5) then
+              print *, "dp3d error is ", norm2(elem(ie)%state%dp3d(i,j,:,np1))
+              stop
+            end if
+            if (norm2(elem(ie)%state%vtheta_dp(i,j,:,np1)) > 10.d-5) then
+              print *, "dp3d error is ", norm2(elem(ie)%state%vtheta_dp(i,j,:,np1))
+              stop
+            end if
+            if (norm2(elem(ie)%state%v(i,j,:,:,np1)) > 10.d-5) then
+              print *, "dp3d error is ", norm2(elem(ie)%state%v(i,j,:,:,np1))
+              stop
+            end if
+         end do
         end do
 
       end do
       stop "nonlinear test success."
-
-
       !!!!!! End nonlinear test.
-
-
-
-
-
-
-
-
 
       do ie = nets,nete
         call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem, ie) 
