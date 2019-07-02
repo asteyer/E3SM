@@ -110,6 +110,7 @@ contains
     real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
     real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
     real (kind=real_kind) :: dphi(nlev)
+    integer :: ii
 
     call t_startf('prim_advance_exp')
     nm1   = tl%nm1
@@ -650,6 +651,71 @@ contains
       ! Compute N(h1) and store in np1
       call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
          deriv,nets,nete,.false.,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
+
+
+
+
+
+
+
+
+
+
+
+      !!!!!!! Test nonlinear rhs
+      ! - we have u stored in nm1; N(u) stored in np1; F(u) stored in n0
+      call compute_andor_apply_rhs(n0,nm1,nm1,qn0,1.d0,elem,hvcoord,hybrid,&
+       deriv,nets,nete,compute_diagnostics,0.d0,1.d0,1.d0,0.d0)
+      do ie = nets, nete
+        ! subtract F(u) - N(u); store in np1
+        call linear_combination_of_elem(np1, 1.d0, n0, -1.d0, np1, elem, ie)
+        ! Use expJ because it is the right size.
+        do i = 1, np
+          do j = 1, np
+            expJ = 0.d0
+            do ii = 1,nlev-1
+              expJ(ii,ii+nlev) = JacD_elem(ii,i,j,ie)        
+              expJ(ii+1,ii+nlev) = JacL_elem(ii,i,j,ie)
+              expJ(ii,ii+1+nlev) = JacU_elem(ii,i,j,ie)
+              expJ(ii+nlev,ii) = 1.d0
+            end do 
+            expJ(nlev,2*nlev) = JacD_elem(nlev,i,j,ie)
+            expJ(2*nlev, nlev) = 1.d0
+ 
+            expJ = expJ*g
+            
+            wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,nm1)
+            wphivec(nlev+1:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,nm1)
+
+            wphivec = matmul(expJ,wphivec)
+            ! Subtract (F(u) - N(u)) - Lu -- should be 0.
+            elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) - wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,np1) - wphivec(nlev+1:2*nlev) 
+            if (norm2(elem(ie)%state%w_i(i,j,1:nlev,np1)) > 10.d-5) then
+              print *, " w error is ", norm2(elem(ie)%state%w_i(i,j,1:nlev,np1))
+              stop
+            end if
+            if (norm2(elem(ie)%state%phinh_i(i,j,1:nlev,np1)) > 10.d-5) then
+              print *, " phi error is ", (norm2(elem(ie)%state%phinh_i(i,j,1:nlev,np1)) > 10.d-5)
+              stop
+            end if
+          end do
+        end do
+
+      end do
+      stop "nonlinear test success."
+
+
+      !!!!!! End nonlinear test.
+
+
+
+
+
+
+
+
+
       do ie = nets,nete
         call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem, ie) 
       end do
