@@ -718,10 +718,21 @@ contains
  !       print *, " phi error in h2 at ", ie, i,j
  !       stop
  !     end if
-      call compute_nonlinear_rhs(np1, np1, np1, qn0, elem, hvcoord,hybrid,&
-        deriv,nets,nete,.false.,0.d0,JacL_elem,JacD_elem,JacU_elem,dt)
+      call compute_nonlinear_rhs(n0, np1, np1, qn0, elem, hvcoord,hybrid,&
+        deriv,nets,nete,.false.,0.d0,JacL_elem,JacD_elem,JacU_elem,dt) ! was np1,np1,np1
       do ie = nets, nete
-        call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem, ie)
+        call linear_combination_of_elem(np1, 1.d0, nm1, dt, n0, elem, ie) ! was np1 instead of n0
+      end do
+      do ie = nets, nete
+        do i = 1, np
+          do j = 1, np
+            wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,np1)
+            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec, expJ)
+            elem(ie)%state%w_i(i,j,1:nlev,np1) = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
+          end do
+        end do
       end do
 
 !==========================================================================================================
@@ -734,91 +745,94 @@ contains
         phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
         call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
         call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL
-        JacU_elem(:,:,:,ie) = JacU
-        JacD_elem(:,:,:,ie) = JacD
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
         call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1, elem, ie)
-        do i = 1,np
-          do j = 1,np
-            ! grabs w and phi for linear operation
-            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,n0)
-            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec, expJ)
-            ! update w and phi after matrix exponential 
-            elem(ie)%state%w_i(i,j,1:nlev,nm1)     = wphivec(1:nlev)
-            elem(ie)%state%phinh_i(i,j,1:nlev,nm1) = wphivec(1+nlev:2*nlev)
-          end do
-        end do 
       end do
       
       ! Compute N(h1) and store in nm1
-      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,.false.,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
+      call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
+         deriv,nets,nete,compute_diagnostics, eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
+      do ie = nets,nete
+        call linear_combination_of_elem(np1,1.d0,n0,dt,np1,elem,ie)
+      end do
       do ie = nets,nete
         do i = 1,np
           do j = 1,np
-            wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,nm1)
-            wphivec(nlev+1:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,nm1)
-            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.true.,nlev,dt,wphivec,expJ)
-            elem(ie)%state%w_i(i,j,1:nlev,nm1) = wphivec(1:nlev)
-            elem(ie)%state%phinh_i(i,j,1:nlev,nm1) = wphivec(nlev+1:2*nlev)
+            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
+            wphivec(nlev+1:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec,expJ)
+            elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(nlev+1:2*nlev)
 
           end do
         end do
       end do
 
-      do ie = nets,nete
-        call linear_combination_of_elem(np1,1.d0,n0,dt,nm1,elem,ie)
-      end do
       ! Standard Forward Euler, stored in nm1.
       call compute_andor_apply_rhs(nm1,n0,n0,qn0,dt,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,0.d0,1.d0,1.d0,1.d0)
       ! compare forward euler steps:
-      print *, "****************************"
-      print *, "Difference in steps:"
-      print *, "IF Forward Euler - phi = ", elem(nets)%state%phinh_i(1,1,:,np1)
-      print *, "Regular Forward Euler - phi = ", elem(nets)%state%phinh_i(1,1,:,nm1)
-!      print *, norm2(elem(nets)%state%phinh_i(1,1,:,np1) - elem(nets)%state%phinh_i(1,1,:,nm1))
+      do ie = nets, nete
+       print *, "ie", ie
+       print *, "max values at nm1 (Standard FE)"
+       print *, "vmaxmax", maxval(abs((elem(ie)%state%v(:,:,:,:,nm1))))
+       print *, "vtheta_dpmax", maxval(abs(elem(ie)%state%vtheta_dp(:,:,:,nm1)))
+       print *, "dp3dmax", maxval(abs(elem(ie)%state%dp3d(:,:,:,nm1)))
+       print *, "wmax", maxval(abs(elem(ie)%state%w_i(:,:,:,nm1)))
+       print *, "phimax", maxval(abs(elem(ie)%state%phinh_i(:,:,:,nm1)))
+
+       print *, "max values at np1"
+       print *, "vmaxmax", maxval(abs((elem(ie)%state%v(:,:,:,:,np1))))
+       print *, "vtheta_dpmax", maxval(abs(elem(ie)%state%vtheta_dp(:,:,:,np1)))
+       print *, "dp3dmax", maxval(abs(elem(ie)%state%dp3d(:,:,:,np1)))
+       print *, "wmax", maxval(abs(elem(ie)%state%w_i(:,:,:,np1)))
+       print *, "phimax", maxval(abs(elem(ie)%state%phinh_i(:,:,:,np1)))
+      end do
 
 !==========================================================================================================
     else if (tstep_type == 15) then ! Andrew's FW Euler
-      ! first compute L in terms of JacL, JacD, JacL
+
+! first compute L in terms of JacL, JacD, JacL
       do ie = nets,nete
         dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
         vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
         phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
         call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
         call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+
+     ! compute N(v(n0)) and store at np1
+     call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
+       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
+
+     ! compute u(n0) + dt * N(u(n0)) and store at np1
+     do ie=nets,nete
+       call linear_combination_of_elem(np1,1d0,n0,dt,np1,elem,ie)
+     enddo
+
+      do ie = nets,nete
         do i = 1,np
           do j = 1,np
             ! grabs w and phi for linear operation
-            wphivec2(ie,i,j,1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,n0)
-            wphivec2(ie,i,j,1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-            call matrix_exponential(-JacL(:,i,j),-JacD(:,i,j),-JacU(:,i,j),nlev,dt,wphivec2(ie,i,j,:), expJ)
+            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
+            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec, expJ)
             ! update w and phi after matrix exponential
+            elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
           end do
         end do
       end do
 
-     ! compute N(v(n0)) and store at np1
-     call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL, JacD, JacU,dt)
 
- !     call compute_andor_apply_rhs(np1,n0,np1,qn0,1d0,elem,hvcoord,hybrid,&
- !       deriv,nets,nete,.false.,0d0,1d0,1d0,0d0)
-
-
-     ! compute exp(L*dt)*u(n0) + dt * N(exp(L*dt)*u(n0)) and store at np1
-     do ie=nets,nete
-       elem(ie)%state%dp3d(:,:,:,np1)           = elem(ie)%state%dp3d(:,:,:,n0)      + dt * elem(ie)%state%dp3d(:,:,:,np1)
-       elem(ie)%state%vtheta_dp(:,:,:,np1)      = elem(ie)%state%vtheta_dp(:,:,:,n0) + dt * elem(ie)%state%vtheta_dp(:,:,:,np1)
-       elem(ie)%state%v(:,:,:,:,np1)            = elem(ie)%state%v(:,:,:,:,n0)       + dt * elem(ie)%state%v(:,:,:,:,np1)
-       elem(ie)%state%w_i(:,:,1:nlev,np1)       = wphivec2(ie,:,:,1:nlev)       + dt * elem(ie)%state%w_i(:,:,1:nlev,np1)
-       elem(ie)%state%phinh_i(:,:,1:nlev,np1)   = wphivec2(ie,:,:,1+nlev:2*nlev)   + dt * elem(ie)%state%phinh_i(:,:,1:nlev,np1)
-     end do
 
      do ie =nets,nete
-       
+
        print *, "ie", ie
        print *, "max values at n0"
        print *, "vmaxmax", maxval(abs((elem(ie)%state%v(:,:,:,:,n0))))
@@ -833,9 +847,120 @@ contains
        print *, "dp3dmax", maxval(abs(elem(ie)%state%dp3d(:,:,:,np1)))
        print *, "wmax", maxval(abs(elem(ie)%state%w_i(:,:,:,np1)))
        print *, "phimax", maxval(abs(elem(ie)%state%phinh_i(:,:,:,np1)))
+
     end do
+!==========================================================================================================
+!===================================================================================
+    elseif (tstep_type == 16) then ! Integrating factor method - second approach to 13
+
+       ! Compute JacL, JacD, and JacU
+       do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+      
+
+      !! g1 = vm = um
+     
+      !! Form g2 = vm + dt*exp(-Ldt)N(exp(Ldt)vm) and store in np1
+      ! Move n0 to np1
+      do ie = nets, nete
+        call linear_combination_of_elem(np1,1.d0, n0, 0.d0, np1, elem,ie)
+      end do
+      ! Compute exp(Ldt)vm and store in np1
+      do ie = nets, nete
+        do i = 1,np
+          do j = 1,np
+            ! grabs w and phi for linear operation
+            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
+            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec, expJ)
+            ! update w and phi after matrix exponential
+            elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
+          end do
+        end do
+      end do 
+      ! Compute N(exp(Ldt)vm) and store in nm1
+      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
+      ! Compute exp(-Ldt)N(exp(Ldt)vm) and store in nm1
+      do ie = nets, nete
+        do i = 1,np
+          do j = 1,np
+            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,nm1)
+            wphivec(nlev+1:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,nm1)
+            call matrix_exponential(JacL_elem(:,i,j,ie), JacD_elem(:,i,j,ie), JacU_elem(:,i,j,ie),.true.,nlev,dt,wphivec,expJ)
+            elem(ie)%state%w_i(i,j,1:nlev,nm1)     = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,nm1) = wphivec(nlev+1:2*nlev)
+          end do
+        end do
+      end do
+      ! Form linear combination to get g2 and store in np1.
+      do ie = nets, nete
+        call linear_combination_of_elem(np1,1.d0, n0, dt, nm1, elem,ie)
+      end do
+
+
+
+      !! Form vmp1 = g3 = vm + dt*exp(-Ldt)N(exp(Ldt)g2)
+      ! Compute exp(Ldt)g2 and store in np1
+      do ie = nets, nete
+        do i = 1,np
+          do j = 1,np
+            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
+            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1) 
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec,expJ)
+            elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
+          end do
+        end do
+      end do
+      ! Compute N(exp(Ldt)g2) and store in nm1
+      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
+      ! Compute exp(-Ldt)N(exp(Ldt)g2 and store in nm1
+      do ie = nets, nete
+        do i = 1, np
+          do j = 1,np
+            wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,nm1)
+            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,nm1)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.true.,nlev,dt,wphivec,expJ)
+            elem(ie)%state%w_i(i,j,1:nlev,nm1) = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,nm1) = wphivec(1+nlev:2*nlev)
+          end do
+        end do
+      end do
+      ! Compute linear combination to get g3 and store in np1.
+      do ie = nets, nete
+        call linear_combination_of_elem(np1, 1.d0, n0, dt, nm1, elem,ie)
+      end do
+
+
+
+      !! Compute ump1 = exp(Ldt)vnmp  = exp(Ldt)g3
+      do ie = nets, nete
+        do i = 1,np
+          do j = 1,np
+            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
+            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec,expJ)
+            elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
+            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
+          end do
+        end do
+      end do
+
+
 
 !==========================================================================================================
+!===================================================================================
     else
       call abortmp('ERROR: bad choice of tstep_type')
     endif
@@ -2805,7 +2930,7 @@ contains
   integer i,j,p,info, maxiter, k, dimJac 
 
   g = 9.80616d0 
-  p = 2  ! parameter used in diagonal Pade approximation
+  p = 25  ! parameter used in diagonal Pade approximation
   pfac = gamma(dble(p+1.d0))/gamma(dble(2.d0*p+1.d0))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
@@ -2868,7 +2993,7 @@ contains
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac) ! using tridiagonal solves
 !  call get_DinvN(p, D, N, DinvN, Tri, alpha, 1,dimJac)  ! using full LU factorization
 !  print *, "----------test------------------"
 !  print *, " diff in methods ", norm2(DinvN- expJ)
