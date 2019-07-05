@@ -489,9 +489,6 @@ contains
 
 !===================================================================================
     elseif (tstep_type == 11) then ! Integrating factor method
-      a1 = 1.d0 ! Coefficient in RK method
-      ! TO DO: add generic RK coefficients to method.
-
       ! get Jacobian
       do ie = nets,nete
         dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
@@ -506,75 +503,18 @@ contains
      ! Compute N(u_m) and store in np1
       call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
           deriv,nets,nete,compute_diagnostics,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
-      do ie = nets,nete
+      call linear_combination_of_elem(np1,dt,np1,1.d0,n0,elem,nets,nete)
       ! Compute dt*N(u_m) + u_m and store in np1
-        call linear_combination_of_elem(np1,dt,np1,1.d0,n0,elem,ie)
         ! Compute e^(dt*Jac)(u_m+alpha*dt*N(u_m)) =: h2
-        do i = 1,np
-          do j = 1,np
-            ! grabs w and phi for linear operation
-            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
-            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
-!            print *, "********************************"
-!            print *, ie, elem(ie)%state%w_i(i,j,:,np1)
-            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec, expJ)
-            ! update w and phi after matrix exponential 
-            elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
-            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
-            if (elem(ie)%state%phinh_i(i,j,1,np1)<elem(ie)%state%phinh_i(i,j,2,np1)) then
-              print *, "**********h_2 errors*************"
-              print *, i, j, ie
-            end if
-          end do
-        end do 
-      end do
-
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
       ! Compute N(h2) and store in nm1
       call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
          deriv,nets,nete,compute_diagnostics,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
      
-      ! Compute N(h2)*dt and store in np1
-      do ie = nets,nete
-        call linear_combination_of_elem(np1,dt,nm1,0.d0,n0,elem,ie)
-        do i = 1,np
-          do j = 1,np
-!            if (elem(ie)%state%phinh_i(i,j,1,np1) < elem(ie)%state%phinh_i(i,j,2,np1)) then
-!              print *, "********first test *****************"
-!              print *, ie, i,j
-!            end if
-            ! grabs w and phi for linear operation
-            wphivec(1:nlev)           = elem(ie)%state%w_i(i,j,1:nlev,n0)
-            wphivec(1 + nlev:2*nlev ) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-!!            if (wphivec(1+nlev) < wphivec(2+nlev)) then
-!!              print *, "*************************"
-!!              print *, "wphivec ", wphivec
-!!              stop
-!!            end if
-            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec, expJ)
-!!            if (wphivec(nlev+1) < wphivec(nlev+2)) then
-!!             print *, "**********second test*************"
-!!              print *, "wphivec ", wphivec
-!!            end if
-            ! update w and phi after matrix exponential and store in np1 
-            ! (h3 = e^(dt*Jac)(u_m) + N(h2))
-            elem(ie)%state%w_i(i,j,1:nlev,np1)     = elem(ie)%state%w_i(i,j,1:nlev,np1) + wphivec(1:nlev)
-            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,np1) + wphivec(1+nlev:2*nlev)
-!!            if (elem(ie)%state%phinh_i(i,j,1,np1) < elem(ie)%state%phinh_i(i,j,2,np1)) then
-!!              print *, "****************"
-!!              print *, "phi_i: ", wphivec(1+nlev:2*nlev)
-!!              stop
-!!            end if
-          end do 
-        end do
-        ! Compute h3 = e^(dt*Jac)(u_m)+N(h2) for the rest of elem%state
-        elem(ie)%state%vtheta_dp(:,:,:,np1) = elem(ie)%state%vtheta_dp(:,:,:,n0) + elem(ie)%state%vtheta_dp(:,:,:,np1)
-        elem(ie)%state%dp3d(:,:,:,np1)      = elem(ie)%state%dp3d(:,:,:,n0) + elem(ie)%state%dp3d(:,:,:,np1)
-        elem(ie)%state%v(:,:,:,:,np1)       = elem(ie)%state%v(:,:,:,:,n0) + elem(ie)%state%v(:,:,:,:,np1)
+      ! (h3 = e^(dt*Jac)(u_m) +dt*N(h2))
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,.false.,dt,nets,nete)
+      call linear_combination_of_elem(np1,dt,nm1,1.d0,n0)
       end do
-!      print *, "**********h_3*************"
-!      do i = 1,nlevp
-!        print *, i, elem(nets)%state%phinh_i(1,1,i,np1)
-!      end do
 
 !==========================================================================================================
     elseif (tstep_type == 12) then ! IMKG232b with a call to compute_nonlinear_rhs
@@ -631,8 +571,8 @@ contains
         JacU_elem(:,:,:,ie) = JacU
         JacD_elem(:,:,:,ie) = JacD
         ! Copy elem(n0) to elem(nm1)
-        call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1, elem, ie)
       end do
+      call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1,elem,nets,nete)
       ! Compute exp(Ldt)*v_m and store in nm1 
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt,nets,nete)
       ! Compute N(h1) and store in np1
@@ -645,7 +585,7 @@ contains
  !      deriv,nets,nete,compute_diagnostics,0.d0,1.d0,1.d0,0.d0)
  !      do ie = nets, nete
  !       ! subtract F(u) - N(u); store in np1
- !        call linear_combination_of_elem(np1, 1.d0, n0, -1.d0, np1, elem, ie)
+ !        call linear_combination_of_elem(np1, 1.d0, n0, -1.d0, np1, elem,nets,nte)
  !      ! Use expJ because it is the right size.
  !        do i = 1, np
  !          do j = 1, np
@@ -695,9 +635,7 @@ contains
  !     stop "nonlinear test success."
  !     !!!!!! End nonlinear test.
 
-      do ie = nets,nete
-        call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem, ie) 
-      end do
+      call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem,nets,nete)
  !     if (elem(ie)%state%phinh_i(i,j,1,np1) < elem(ie)%state%phinh_i(i,j,2,np1)) then
  !       print *, "*******************"
  !       print *, " phi error in h2 at ", ie, i,j
@@ -705,9 +643,7 @@ contains
  !     end if
       call compute_nonlinear_rhs(n0, np1, np1, qn0, elem, hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt) ! was np1,np1,np1
-      do ie = nets, nete
-        call linear_combination_of_elem(np1, 1.d0, nm1, dt, n0, elem, ie) ! was np1 instead of n0
-      end do
+      call linear_combination_of_elem(np1, 1.d0, nm1, dt, n0, elem, nets,nete) ! was np1 instead of n0
       ! Compute exp(Ldt)*elem(np1) and store in np1.
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
 
@@ -724,15 +660,13 @@ contains
         JacL_elem(:,:,:,ie) = JacL(:,:,:)
         JacU_elem(:,:,:,ie) = JacU(:,:,:)
         JacD_elem(:,:,:,ie) = JacD(:,:,:)
-        call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1, elem, ie)
       end do
       
+      call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1, elem,nets,nete)
       ! Compute N(h1) and store in nm1
       call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
          deriv,nets,nete,compute_diagnostics, eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
-      do ie = nets,nete
-        call linear_combination_of_elem(np1,1.d0,n0,dt,np1,elem,ie)
-      end do
+      call linear_combination_of_elem(np1,1.d0,n0,dt,np1,elem,nets,nete)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
       ! Standard Forward Euler, stored in nm1.
       call compute_andor_apply_rhs(nm1,n0,n0,qn0,dt,elem,hvcoord,hybrid,&
@@ -775,9 +709,7 @@ contains
        deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
 
      ! compute u(n0) + dt * N(u(n0)) and store at np1
-     do ie=nets,nete
-       call linear_combination_of_elem(np1,1d0,n0,dt,np1,elem,ie)
-     enddo
+     call linear_combination_of_elem(np1,1d0,n0,dt,np1,elem,nets,nete)
 
       do ie = nets,nete
         do i = 1,np
@@ -834,9 +766,7 @@ contains
      
       !! Form g2 = vm + dt*exp(-Ldt)N(exp(Ldt)vm) and store in np1
       ! Move n0 to np1
-      do ie = nets, nete
-        call linear_combination_of_elem(np1,1.d0, n0, 0.d0, np1, elem,ie)
-      end do
+      call linear_combination_of_elem(np1,1.d0, n0, 0.d0, np1, elem,nets,nete)
       ! Compute exp(Ldt)vm and store in np1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
       ! Compute N(exp(Ldt)vm) and store in nm1
@@ -845,9 +775,7 @@ contains
       ! Compute exp(-Ldt)N(exp(Ldt)vm) and store in nm1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt,nets,nete)
       ! Form linear combination to get g2 and store in np1.
-      do ie = nets, nete
-        call linear_combination_of_elem(np1,1.d0, n0, dt, nm1, elem,ie)
-      end do
+      call linear_combination_of_elem(np1,1.d0, n0, dt, nm1, elem,nets,nete)
 
       !! Form vmp1 = g3 = vm + dt*exp(-Ldt)N(exp(Ldt)g2)
       ! Compute exp(Ldt)g2 and store in np1
@@ -858,9 +786,7 @@ contains
       ! Compute exp(-Ldt)N(exp(Ldt)g2 and store in nm1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt,nets,nete)
       ! Compute linear combination to get g3 and store in np1.
-      do ie = nets, nete
-        call linear_combination_of_elem(np1, 1.d0, n0, dt, nm1, elem,ie)
-      end do
+      call linear_combination_of_elem(np1, 1.d0, n0, dt, nm1, elem,nets,nete)
 
       !! Compute ump1 = exp(Ldt)vnmp  = exp(Ldt)g3
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
@@ -869,6 +795,47 @@ contains
 
 !==========================================================================================================
     elseif (tstep_type == 17) then ! Second order RK method
+      a1 = 0.5d0
+      ! Compute JacL, JacD, and JacU
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+      !! g1 = v_m = u_m
+
+      !! g2 = vm + 1/2 dt exp(-L*dt/2)N(exp(L*dt/2)*1/2*v_m)
+      ! calculate v_m/2
+      call linear_combination_of_elem(np1,a1,n0,0.d0,np1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*a1,nets,nete)
+      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*a1,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,a1*dt,nm1,elem,nets,nete)
+
+      !! g3 = vm + 1/2 dt exp(-L*dt/2)N(exp(L*dt/2)*1/2*g2)
+      call linear_combination_of_elem(np1,a1,np1,0.d0,n0,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*a1,nets,nete)
+      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*a1,nets,nete)
+      call linear_combination_of_elem(np1, 1.d0,n0,a1*dt,nm1,elem,nets,nete)
+
+      !! g4 = vm + dt*exp(-Ldt)*N(exp(Ldt)g3)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
+      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,dt,nm1,elem,nets,nete)
+
+      !! Ump1 = exp(Ldt)vmp1
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
+
 
 !!==========================================================================================================
     else
@@ -3040,7 +3007,7 @@ contains
 
   end subroutine get_DinvN
 !===========================================================================================================
-  subroutine linear_combination_of_elem(t3,a1,t1,a2,t2,elem,ie)
+  subroutine linear_combination_of_elem(t3,a1,t1,a2,t2,elem,nets,nete)
   !===================================================================================
   ! this subroutine calculates the linear combination a1*elem(t1) + a2*elem(t2)
   ! and stores it in elem(t3)
@@ -3049,15 +3016,19 @@ contains
   !===================================================================================
 
   real (kind=real_kind), intent(in)       :: a1,a2
-  integer, intent(in)                     :: t1,t2,t3,ie
+  integer, intent(in)                     :: t1,t2,t3,nets,nete
   type (element_t), intent(inout), target :: elem(:) 
 
-  elem(ie)%state%dp3d(:,:,:,t3)         = elem(ie)%state%dp3d(:,:,:,t1) * a1         + elem(ie)%state%dp3d(:,:,:,t2) * a2
-  elem(ie)%state%w_i(:,:,1:nlev,t3)     = elem(ie)%state%w_i(:,:,1:nlev,t1) * a1     + elem(ie)%state%w_i(:,:,1:nlev,t2) * a2
-  elem(ie)%state%phinh_i(:,:,1:nlev,t3) = elem(ie)%state%phinh_i(:,:,1:nlev,t1) * a1 + elem(ie)%state%phinh_i(:,:,1:nlev,t2) * a2
-  elem(ie)%state%vtheta_dp(:,:,:,t3)    = elem(ie)%state%vtheta_dp(:,:,:,t1) * a1    + elem(ie)%state%vtheta_dp(:,:,:,t2) * a2
-  elem(ie)%state%v(:,:,:,:,t3)          = elem(ie)%state%v(:,:,:,:,t1) * a1          + elem(ie)%state%v(:,:,:,:,t2) * a2       
+  ! Local variables
+  integer :: ie
 
+  do ie = nets, nete
+    elem(ie)%state%dp3d(:,:,:,t3)         = elem(ie)%state%dp3d(:,:,:,t1) * a1         + elem(ie)%state%dp3d(:,:,:,t2) * a2
+    elem(ie)%state%w_i(:,:,1:nlev,t3)     = elem(ie)%state%w_i(:,:,1:nlev,t1) * a1     + elem(ie)%state%w_i(:,:,1:nlev,t2) * a2
+    elem(ie)%state%phinh_i(:,:,1:nlev,t3) = elem(ie)%state%phinh_i(:,:,1:nlev,t1) * a1 + elem(ie)%state%phinh_i(:,:,1:nlev,t2) * a2
+    elem(ie)%state%vtheta_dp(:,:,:,t3)    = elem(ie)%state%vtheta_dp(:,:,:,t1) * a1    + elem(ie)%state%vtheta_dp(:,:,:,t2) * a2
+    elem(ie)%state%v(:,:,:,:,t3)          = elem(ie)%state%v(:,:,:,:,t1) * a1          + elem(ie)%state%v(:,:,:,:,t2) * a2       
+  end do
 
   end subroutine linear_combination_of_elem
 !=============================================================================================
