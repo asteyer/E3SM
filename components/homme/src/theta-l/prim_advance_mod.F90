@@ -513,8 +513,7 @@ contains
      
       ! (h3 = e^(dt*Jac)(u_m) +dt*N(h2))
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,.false.,dt,nets,nete)
-      call linear_combination_of_elem(np1,dt,nm1,1.d0,n0)
-      end do
+      call linear_combination_of_elem(np1,dt,nm1,1.d0,n0,elem,nets,nete)
 
 !==========================================================================================================
     elseif (tstep_type == 12) then ! IMKG232b with a call to compute_nonlinear_rhs
