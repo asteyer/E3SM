@@ -251,7 +251,7 @@ contains
   w(3) = 1.d0
 
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU,.false.,5,1.d0, w, approxexpJac)
+  call matrix_exponential(JacL, JacD, JacU,.false.,5,1.d0, approxexpJac)
   
   exactExp = 0.d0
   exactExp(1,1) = exp(-23.47836142539358d0)
@@ -347,7 +347,7 @@ contains
   w = 0.d0
   w(2) = 1.d0
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU,.false.,4,1.d0, w, approxexpJac)  
+  call matrix_exponential(JacL, JacD, JacU,.false.,4,1.d0, approxexpJac)  
   exactExp = (0.d0, 0.d0)
   exactExp(1,1) = exp(cmplx(0.d0,12.42728757865824d0))
   exactExp(2,2) = exp(cmplx(0.d0,-12.42728757865824d0))

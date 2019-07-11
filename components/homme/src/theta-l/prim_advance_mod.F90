@@ -100,7 +100,7 @@ contains
     real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
     real (kind=real_kind), pointer, dimension(:,:,:)   :: vtheta_dp
     real (kind=real_kind), pointer, dimension(:,:)   :: phis
-    real (kind=real_kind) :: expJ(2*nlev, 2*nlev)
+    real (kind=real_kind) :: expJ(2*nlev, 2*nlev), iden(2*nlev,2*nlev)
     real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
     real (kind=real_kind) :: JacU(nlev-1,np,np)
     real (kind=real_kind) :: JacD_elem(nlev,np,np,nete-nets+1)
@@ -716,7 +716,7 @@ contains
             ! grabs w and phi for linear operation
             wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
             wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
-            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,wphivec, expJ)
+            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,expJ,wphivec)
             ! update w and phi after matrix exponential
             elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
             elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
@@ -832,6 +832,30 @@ contains
 
       !! Ump1 = exp(Ldt)vmp1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
+!==========================================================================================================
+    elseif (tstep_type == 18) then ! ETD1
+   ! Compute JacL, JacD, and JacU
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+    
+      ! Form identity matrix
+      iden = 0.d0
+      do i = 1, 2*nlev
+        iden(i,i) = 1.d0
+      end do
+
+      ! Compute inv(L)*(exp(Ldt)-I)N(u)    
+      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,.false.,0.d0,JacL_elem,JacD_elem,JacU_elem,dt)  !N(u)
+      ! Form exp(Ldt) - I
 
 
 !!==========================================================================================================
@@ -2780,7 +2804,7 @@ contains
   end subroutine compute_stage_value_dirk
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(JacL, JacD, JacU, neg, dimDiag, dt, w, expJ)
+  subroutine matrix_exponential(JacL, JacD, JacU, neg, dimDiag, dt, expJ, w)
   !===================================================================================
   ! this subroutine calculates the matrix exponential of the matrix of the form
   !    [ 0       g*dt*T
@@ -2796,7 +2820,7 @@ contains
   integer, intent(in) :: dimDiag
   real (kind=real_kind), intent(in) :: dt
   real (kind=real_kind), intent(out) :: expJ(2*dimDiag, 2*dimDiag)
-  real (kind=real_kind), dimension(:), intent(inout) :: w 
+  real (kind=real_kind), dimension(:), intent(inout), optional :: w 
   ! local variables
   real (kind=real_kind) :: N(2*dimDiag,2*dimDiag), D(2*dimDiag,2*dimDiag), &
     Aj(2*dimDiag,2*dimDiag), negAj(2*dimDiag,2*dimDiag), Jac(2*dimDiag,2*dimDiag), &
@@ -3045,7 +3069,7 @@ contains
       do j = 1,np
         wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
         wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,wphivec,expJ)
+        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec)
         elem(ie)%state%w_i(i,j,1:nlev,n0) = wphivec(1:nlev)
         elem(ie)%state%phinh_i(i,j,1:nlev,n0) = wphivec(1+nlev:2*nlev)
       end do
