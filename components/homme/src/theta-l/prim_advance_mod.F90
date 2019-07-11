@@ -768,29 +768,28 @@ contains
       call linear_combination_of_elem(np1,1.d0, n0, 0.d0, np1, elem,nets,nete)
       ! Compute exp(Ldt)vm and store in np1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
+
       ! Compute N(exp(Ldt)vm) and store in nm1
       call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
        deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
-      ! Compute exp(-Ldt)N(exp(Ldt)vm) and store in nm1
+     ! Compute exp(-Ldt)N(exp(Ldt)vm) and store in nm1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt,nets,nete)
-      ! Form linear combination to get g2 and store in np1.
+    ! Form linear combination to get g2 and store in np1.
       call linear_combination_of_elem(np1,1.d0, n0, dt, nm1, elem,nets,nete)
 
       !! Form vmp1 = g3 = vm + dt*exp(-Ldt)N(exp(Ldt)g2)
       ! Compute exp(Ldt)g2 and store in np1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
-      ! Compute N(exp(Ldt)g2) and store in nm1
+     ! Compute N(exp(Ldt)g2) and store in nm1
       call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      ! Compute exp(-Ldt)N(exp(Ldt)g2 and store in nm1
+    ! Compute exp(-Ldt)N(exp(Ldt)g2 and store in nm1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt,nets,nete)
       ! Compute linear combination to get g3 and store in np1.
       call linear_combination_of_elem(np1, 1.d0, n0, dt, nm1, elem,nets,nete)
 
-      !! Compute ump1 = exp(Ldt)vnmp  = exp(Ldt)g3
+  !! Compute ump1 = exp(Ldt)vnmp  = exp(Ldt)g3
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
-
-
 
 !==========================================================================================================
     elseif (tstep_type == 17) then ! Second order RK method
@@ -818,7 +817,6 @@ contains
       call linear_combination_of_elem(np1,1.d0,n0,a1*dt,nm1,elem,nets,nete)
 
       !! g3 = vm + 1/2 dt exp(-L*dt/2)N(exp(L*dt/2)*g2)
-      call linear_combination_of_elem(np1,1.d0,np1,0.d0,n0,elem,nets,nete)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*a1,nets,nete)
       call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
@@ -2557,7 +2555,6 @@ contains
   ! local variables
   real (kind=real_kind) :: wphivec(2*nlev)
   real (kind=real_kind) :: L(2*nlev, 2*nlev)
-  real (kind=real_kind) :: g = 9.80616d0
   real (kind=real_kind) :: wphivec2(2*nlev,np,np,nete-nets+1)
   integer :: ii, i,j,k,ie
 
@@ -2807,11 +2804,10 @@ contains
     Tri(dimDiag,dimDiag)
   real (kind=real_kind) :: work(2*dimDiag)
   integer :: ipiv(2*dimDiag)
-  real (kind=real_kind) normJ, pfac, fac, g, alpha
+  real (kind=real_kind) normJ, pfac, fac, alpha
   integer i,j,p,info, maxiter, k, dimJac 
 
-  g = 9.80616d0 
-  p = 25  ! parameter used in diagonal Pade approximation
+  p = 2  ! parameter used in diagonal Pade approximation
   pfac = gamma(dble(p+1.d0))/gamma(dble(2.d0*p+1.d0))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
@@ -2874,7 +2870,7 @@ contains
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac) ! using tridiagonal solves
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
 !  call get_DinvN(p, D, N, DinvN, Tri, alpha, 1,dimJac)  ! using full LU factorization
 !  print *, "----------test------------------"
 !  print *, " diff in methods ", norm2(DinvN- expJ)
@@ -3023,7 +3019,7 @@ contains
 
   do ie = nets, nete
     elem(ie)%state%dp3d(:,:,:,t3)         = elem(ie)%state%dp3d(:,:,:,t1) * a1         + elem(ie)%state%dp3d(:,:,:,t2) * a2
-    elem(ie)%state%w_i(:,:,1:nlev,t3)     = elem(ie)%state%w_i(:,:,1:nlev,t1) * a1     + elem(ie)%state%w_i(:,:,1:nlev,t2) * a2
+    elem(ie)%state%w_i(:,:,1:nlevp,t3)     = elem(ie)%state%w_i(:,:,1:nlevp,t1) * a1     + elem(ie)%state%w_i(:,:,1:nlevp,t2) * a2
     elem(ie)%state%phinh_i(:,:,1:nlev,t3) = elem(ie)%state%phinh_i(:,:,1:nlev,t1) * a1 + elem(ie)%state%phinh_i(:,:,1:nlev,t2) * a2
     elem(ie)%state%vtheta_dp(:,:,:,t3)    = elem(ie)%state%vtheta_dp(:,:,:,t1) * a1    + elem(ie)%state%vtheta_dp(:,:,:,t2) * a2
     elem(ie)%state%v(:,:,:,:,t3)          = elem(ie)%state%v(:,:,:,:,t1) * a1          + elem(ie)%state%v(:,:,:,:,t2) * a2       
