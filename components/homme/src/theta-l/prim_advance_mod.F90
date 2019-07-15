@@ -3064,7 +3064,7 @@ contains
       do j = 1,np
         wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
         wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Pade approximation
+!        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Pade approximation
         call matrix_exponential2(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Taylor approximation
         elem(ie)%state%w_i(i,j,1:nlev,n0) = wphivec(1:nlev)
         elem(ie)%state%phinh_i(i,j,1:nlev,n0) = wphivec(1+nlev:2*nlev)
