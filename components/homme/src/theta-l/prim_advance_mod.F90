@@ -306,11 +306,11 @@ contains
 
       call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
 
-      print *, "The Jacobian is: "
-      print *, "JacL = ", JacL(:,1,1)
-      print *, "JacD = ", JacD(:,1,1)
-      print *, "JacU = ", JacU(:,1,1)
-      print *, "***************************************************************"
+!      print *, "The Jacobian is: "
+!      print *, "JacL = ", JacL(:,1,1)
+!      print *, "JacD = ", JacD(:,1,1)
+!      print *, "JacU = ", JacU(:,1,1)
+!      print *, "***************************************************************"
 
       call compute_andor_apply_rhs(np1,n0,n0,qn0,a1*dt,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
@@ -2890,6 +2890,7 @@ contains
 !  print *, "----------test------------------"
 !  print *, " diff in methods ", norm2(DinvN- expJ)
 !  print *, "-------------------------------"
+
   ! Squaring
   do i=1,k
     expJ = matmul(expJ, expJ)
@@ -2918,27 +2919,27 @@ contains
   real (kind=real_kind), intent(in):: alph
  
   ! local variables
-  complex*16 sig1, sig2, sig1Inv, sig2Inv, kfac, alpha
+  complex(kind=8) :: sig1, sig2, sig1Inv, sig2Inv, kfac, alpha
   integer :: block_dim, info, i
   integer :: ipiv(dimJac)
-  complex*16 :: work(dimJac), TriD(dimJac/2), TriL(dimJac/2 - 1), TriU(dimJac/2 - 1)
-  complex*16 :: B(dimJac/2,dimJac), X1(dimJac/2,dimJac), X2(dimJac/2,dimJac), N1(dimJac/2,dimJac), N2(dimJac/2,dimJac)
+  complex(kind=8) :: work(dimJac), TriD(dimJac/2), TriL(dimJac/2 - 1), TriU(dimJac/2 - 1)
+  complex(kind=8) :: B(dimJac/2,dimJac), X1(dimJac/2,dimJac), X2(dimJac/2,dimJac), N1(dimJac/2,dimJac), N2(dimJac/2,dimJac)
 
   alpha = dcmplx(alph)
   block_dim = dimJac/2
   ! Variables used to factor Pade approximation
-  kfac = (12.q0, 0.q0)
-  sig1 = dcmplx(3.q0,sqrt(3.q0))
-  sig2 = dcmplx(3.q0, (-sqrt(3.q0)))
+  kfac = (12.d0, 0.d0)
+  sig1 = dcmplx(3.d0,sqrt(3.d0))
+  sig2 = dcmplx(3.d0, (-sqrt(3.d0)))
   sig1Inv = conjg(sig1)/(real(sig1)**2 + imag(sig1)**2)
   sig2Inv = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
 
   ! Invert matrix D
-  DinvN = 0.q0
+  DinvN = 0.d0
  
   if (opt == 1) then  ! Calculate inverse using full LU decomp
     DinvN = D
-    work = 0.q0
+    work = 0.d0
     ipiv = 0
     call DGETRF(dimJac, dimJac, DinvN, dimJac, ipiv, info)
     call DGETRI(dimJac, DinvN, dimJac, ipiv, work, dimJac, info)
@@ -2949,22 +2950,21 @@ contains
     if (p /= 2) then
       stop 'Must have p = 2 approximation' ! Factoring done by hand - only for p=2
     end if
-    X1 = 0.q0
-    X2 = 0.q0
-    N1 = 0.q0
+    X1 = 0.d0
+    N1 = 0.d0
     N1 = dcmplx(N(1:block_dim, 1:dimJac))
-    N2 = 0.q0
+    N2 = 0.d0
     N2 = dcmplx(N(block_dim+1:dimJac, 1:dimJac))
 ! sig1I-Jac is not nice to invert. We left multiply by (I& 0\\ g*dt*sig1InvI& I) so
 ! that we can solve the triangular system 
 ! (-g^2sig1InvTri + sig1I)X2 = (gsig1InvN1+N2)  and back substitute to get
 ! X1 = sig1Inv(N1+gTriX2)
     do i = 1,block_dim-1
-      TriD(i) = dcmplx(Tri(i,i),0.q0)
-      TriL(i) = dcmplx(Tri(i+1,i),0.q0)
-      TriU(i) = dcmplx(Tri(i,i+1),0.q0)
+      TriD(i) = dcmplx(Tri(i,i),0.d0)
+      TriL(i) = dcmplx(Tri(i+1,i),0.d0)
+      TriU(i) = dcmplx(Tri(i,i+1),0.d0)
     end do
-   TriD(block_dim) = dcmplx(Tri(block_dim, block_dim), 0.q0)
+   TriD(block_dim) = dcmplx(Tri(block_dim, block_dim), 0.d0)
 
     ! solve for X1 and X2
     TriD = TriD*(-sig1Inv)*alpha**2
@@ -2975,7 +2975,7 @@ contains
       TriD(i) = TriD(i) + sig1
     end do
 
-    B = 0.q0
+    B = 0.d0
     B = (kfac*(alpha*sig1Inv*N1 + N2))
     call ZGTSV(block_dim, dimJac, TriL, TriD, TriU, B, block_dim, info)
 
@@ -2988,11 +2988,11 @@ contains
     N1 = X1
     N2 = X2
     do i = 1,block_dim-1  ! ZGTSV writes over Tri, so we have to get it again
-      TriD(i) = dcmplx(Tri(i,i),0.q0)
-      TriL(i) = dcmplx(Tri(i+1,i),0.q0)
-      TriU(i) = dcmplx(Tri(i,i+1),0.q0)
+      TriD(i) = dcmplx(Tri(i,i),0.d0)
+      TriL(i) = dcmplx(Tri(i+1,i),0.d0)
+      TriU(i) = dcmplx(Tri(i,i+1),0.d0)
     end do
-    TriD(block_dim) = dcmplx(Tri(block_dim, block_dim),0.q0)
+    TriD(block_dim) = dcmplx(Tri(block_dim, block_dim),0.d0)
 
     ! solve for X1 and X2
     TriD = TriD*(-sig2Inv)*alpha**2
