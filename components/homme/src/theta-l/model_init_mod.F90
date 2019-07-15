@@ -73,6 +73,8 @@ contains
     ! unit test for matrix exponential
     call test_matrix_exponential2(hybrid)
 
+    ! unit test for mat_exp accuracy
+    call test_matrix_exponential_accuracy(hybrid)
     ! 
     ! compute scaling of sponge layer damping 
     !
@@ -227,10 +229,8 @@ contains
     exactExp(10,10), factor(10,10), factorInv(10,10), D(10,10)
   real (kind=real_kind) :: work(10), JacL(4), JacU(4), JacD(5), w(10)
   integer, dimension(10) :: ipiv
-  real (kind = real_kind) :: error, g
+  real (kind = real_kind) :: error
   integer :: n, info
-
-  g = 9.80616d0
 
   if (hybrid%masterthread) write(iulog,*)'Running matrix exponential unit test...'
   JacL(1) = -0.5d0
@@ -327,10 +327,8 @@ contains
   complex*16 :: work(8)
   real (kind=real_kind) :: JacL(3), JacU(3), JacD(4), w(8)
   integer, dimension(8) :: ipiv
-  real (kind = real_kind) :: error, g
+  real (kind = real_kind) :: error
   integer :: n, info
-
-  g = 9.80616d0
 
   if (hybrid%masterthread) write(iulog,*)'Running matrix exponential unit test...'
   JacL(1) = -0.1d0
@@ -349,34 +347,34 @@ contains
   ! Rational approximation
   call matrix_exponential(JacL, JacD, JacU,.false.,4,1.d0, approxexpJac)  
   exactExp = (0.d0, 0.d0)
-  exactExp(1,1) = exp(cmplx(0.d0,12.42728757865824d0))
-  exactExp(2,2) = exp(cmplx(0.d0,-12.42728757865824d0))
-  exactExp(3,3) = exp(cmplx(0.d0, 6.15500376348600d0))
-  exactExp(4,4) = exp(cmplx(0.d0,-6.15500376348600d0))
-  exactExp(5,5) = exp(cmplx(0.d0, 10.05874895171580d0))
-  exactExp(6,6) = exp(cmplx(0.d0,-10.05874895171580d0))
-  exactExp(7,7) = exp(cmplx(0.d0, 9.54689045802644d0))
-  exactExp(8,8) = exp(cmplx(0.d0,-9.54689045802644d0))
+  exactExp(1,1) = exp(dcmplx(0.d0,12.42728757865824d0))
+  exactExp(2,2) = exp(dcmplx(0.d0,-12.42728757865824d0))
+  exactExp(3,3) = exp(dcmplx(0.d0, 6.15500376348600d0))
+  exactExp(4,4) = exp(dcmplx(0.d0,-6.15500376348600d0))
+  exactExp(5,5) = exp(dcmplx(0.d0, 10.05874895171580d0))
+  exactExp(6,6) = exp(dcmplx(0.d0,-10.05874895171580d0))
+  exactExp(7,7) = exp(dcmplx(0.d0, 9.54689045802644d0))
+  exactExp(8,8) = exp(dcmplx(0.d0,-9.54689045802644d0))
   D = (0.d0, 0.d0)
-  D(1,1) = cmplx(0.d0,12.42728757865824d0)
-  D(2,2) = cmplx(0.d0,-12.42728757865824d0)
-  D(3,3) = cmplx(0.d0, 6.15500376348600d0)
-  D(4,4) = cmplx(0.d0,-6.15500376348600d0)
-  D(5,5) = cmplx(0.d0, 10.05874895171580d0)
-  D(6,6) = cmplx(0.d0,-10.05874895171580d0)
-  D(7,7) = cmplx(0.d0, 9.54689045802644d0)
-  D(8,8) = cmplx(0.d0,-9.54689045802644d0)
+  D(1,1) = dcmplx(0.d0,12.42728757865824d0)
+  D(2,2) = dcmplx(0.d0,-12.42728757865824d0)
+  D(3,3) = dcmplx(0.d0, 6.15500376348600d0)
+  D(4,4) = dcmplx(0.d0,-6.15500376348600d0)
+  D(5,5) = dcmplx(0.d0, 10.05874895171580d0)
+  D(6,6) = dcmplx(0.d0,-10.05874895171580d0)
+  D(7,7) = dcmplx(0.d0, 9.54689045802644d0)
+  D(8,8) = dcmplx(0.d0,-9.54689045802644d0)
 !  print *, "-----------------------------------------------------------"
 !  print *, "diagonal matrix is ", exactExp
 !  print *, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
 
-  factor = cmplx(0.d0,0.d0)
+  factor = dcmplx(0.d0,0.d0)
   factor = reshape((/ (0.287993245000171d0, 0.d0), (0.349067421277112d0, 0.000000000000001d0), (0.609158053712011d0, 0.d0), (-0.201030968704744d0, 0.d0), (0.d0, -0.227250542124800d0), (0.000000000000001d0, -0.275443129658414d0), (0.d0, -0.480676197615885d0), (0.d0, 0.158630097806633d0), (0.287993245000171d0, 0.d0), (0.349067421277112d0, -0.000000000000001d0), (0.609158053712011d0, -0.d0), (-0.201030968704744d0, 0.d0), (0.d0, 0.227250542124800d0), (0.000000000000001d0, 0.275443129658414d0), (0.d0, 0.480676197615885d0), (0.d0, -0.158630097806633d0), (0.d0, 0.195028569017136d0), (0.000000000000001d0, -0.236387904383439d0), (-0.000000000000001d0, 0.412520868399696d0), (0.d0, 0.136137853353440d0), (0.310719769774749d0, 0.d0), (-0.376613516664338d0, 0.d0), (0.657228783979698d0, 0.d0), (0.216895004997409d0, 0.d0), (0.d0, -0.195028569017136d0), (0.000000000000001d0, 0.236387904383439d0), (-0.000000000000001d0, -0.412520868399696d0), (0.d0, -0.136137853353440d0), (0.310719769774749d0, 0.d0), (-0.376613516664338d0, 0.d0), (0.657228783979698d0, 0.d0), (0.216895004997409d0, 0.d0), (0.446685068099900d0, 0.d0), (0.046615936123790d0, 0.d0), (-0.140786977995072d0, 0.d0), (0.539621821055463d0, 0.d0), (0.d0,-0.435468194745166d0), (0.d0,-0.045445346173163d0), (0.d0, 0.137251624308673d0), (0.d0, -0.526071178648774d0), (0.446685068099900d0, 0.d0), (0.046615936123790d0, 0.d0), (-0.140786977995072d0, 0.d0), (0.539621821055463d0, 0.d0), (0.d0, 0.435468194745166d0), (0.d0, 0.045445346173163d0), (0.d0,-0.137251624308673d0), (0.d0, 0.526071178648774d0), (-0.000000000000001d0, -0.435163731128617d0), (0.d0, 0.045413572430284d0), (0.d0, 0.137155662935565d0), (0.d0, 0.525703368701800d0), (-0.446981683974023d0, 0.000000000000001d0), (0.046646890878332d0, 0.d0), (0.140880465903057d0, 0.d0), (0.539980150468232d0, 0.d0), (-0.000000000000001d0, 0.435163731128617d0), (0.d0, -0.045413572430284d0), (0.d0, -0.137155662935565d0), (0.d0, -0.525703368701800d0), (-0.446981683974023d0, -0.000000000000001d0), (0.046646890878332d0, 0.d0), (0.140880465903057d0, 0.d0), (0.539980150468232d0, 0.d0) /), shape(factor))
  
   ! Actual analytic exponential
-  factorInv = cmplx(0.d0, 0.d0)
+  factorInv = dcmplx(0.d0, 0.d0)
   factorInv = factor
-  work = cmplx(0.d0, 0.d0)
+  work = dcmplx(0.d0, 0.d0)
   ipiv = 0
   n = 8
 
@@ -387,7 +385,7 @@ contains
 
   call ZGETRI(n,factorInv,n,ipiv,work,n,info)
   if (info /= 0) then
-    stop 'Matrix inversion failed!'
+    stop 'Matrix inversion failed! - test 2'
   end if
 
   exactExp = matmul(matmul(factor, exactExp), factorInv)  
@@ -408,6 +406,114 @@ contains
   end if
 
   end subroutine test_matrix_exponential2
+
+  subroutine test_matrix_exponential_accuracy(hybrid)
+
+  type(hybrid_t)    , intent(in) :: hybrid
+
+  ! local
+  real (kind=real_kind) :: approxexpJac(40,40), iden(40,40)
+  complex*16 :: factor(40,40), factorInv(40,40), exactExp(40,40), A(40,40), garbage(40,40), Acopy(40,40)
+  complex*16 :: work(40), D(40), work2(100)
+  real (kind=real_kind) :: JacL(19), JacU(19), JacD(20), rwork(80)
+  integer, dimension(8) :: ipiv
+  real (kind = real_kind) :: error
+  integer :: n, info, i
+
+  if (hybrid%masterthread) write(iulog,*)'Testing accuracy of Pade approx...'
+  JacL = (/ 3.757951454493374q-003, 3.819276450619194q-003, 3.880299668323407q-003,&
+     3.941024255519856q-003, 4.001453427054409q-003, 4.061590011618724q-003,&
+     4.121436472079190q-003, 4.180994935960876q-003, 4.240267208588646q-003,&
+     4.299254777865632q-003, 4.357958817789391q-003, 4.416380194910784q-003,&
+     4.474519480093797q-003, 4.532376966683320q-003, 4.589952695389095q-003,&
+     4.647246485637452q-003, 4.704257972792853q-003, 4.760986650405008q-003,&
+     4.817431916249652q-003/)
+
+  JacD = (/-7.738077153201838q-003, -7.801334908243546q-003,&
+     -7.923983063331936q-003, -8.046030284613884q-003, -8.167482988553411q-003,&
+     -8.288347249486747q-003, -8.408628369535837q-003, -8.528330932396275q-003,&
+     -8.647458848755431q-003, -8.766015375402829q-003, -8.884003124541974q-003,&
+     -9.001424074841970q-003, -9.118279590907854q-003, -9.234570454679255q-003,&
+     -9.350296910174005q-003, -9.465458721612778q-003, -9.580055244031766q-003,&
+     -9.694085504896373q-003, -9.807548294578283q-003, -9.920442262019286q-003/)
+
+  JacU = (/7.738077153201838q-003, 4.043383453750170q-003, 4.104706612712742q-003,&
+     4.165730616290477q-003, 4.226458733033555q-003, 4.286893822432338q-003,&
+     4.347038357917113q-003, 4.406894460317085q-003, 4.466463912794555q-003,&
+     4.525748166814183q-003, 4.584748346676341q-003, 4.643465257052578q-003,&
+     4.701899395997070q-003, 4.760050974585458q-003, 4.817919943490685q-003,&
+     4.875506026223682q-003, 4.932808758394314q-003, 4.989827532103520q-003,&
+     5.046561644173274q-003/)
+
+! Rational approximation
+  call matrix_exponential(JacL, JacD, JacU,.false.,20,1.d0, approxexpJac)
+  ! Form matrix A
+
+  A = 0.q0
+  iden = 0.q0
+  do i =1,19
+    A(i,i+20) = dcmplx(JacD(i),0.q0)
+    A(i,i+21) = dcmplx(JacU(i),0.q0)
+    A(i+1, i+20) = dcmplx(JacL(i),0.q0)
+    A(i+20,i) = dcmplx(1.q0,0.q0)
+    iden(i,i) = 1.q0
+    iden(20+i, 20+i) = 1.q0
+  end do
+  A(40,20) = 1.q0
+  A(20,40) = dcmplx(JacD(20),0.q0)
+  iden(20,20) = 1.q0
+  iden(40,40) = 1.q0
+
+  A = A * g
+  Acopy = A
+  call ZGEEV('V','V',40,A,40,D,garbage,40,factor,40,work2,100,rwork,info)
+
+  if (info /= 0) then
+    stop 'Eigen decomposition failed.'
+  end if
+  exactExp = 0.q0
+  do i = 1,40
+    exactExp(i,i) = exp(D(i))
+!     exactExp(i,i) = D(i) ! for testing matrix decomposition
+  end do
+
+
+ factorInv = factor
+
+  call ZGETRF(40,40,factorInv,40,ipiv,info)
+  if (info /= 0) then
+    stop 'Matrix is numerically singular!'
+  end if
+
+  call ZGETRI(40,factorInv,40,ipiv,work,40,info)
+  if (info /= 0) then
+!    print *, "************************"
+!    print *, "D = ", D
+    stop 'Matrix inversion failed! - accuracy test'
+  end if
+
+!  print *, "********************************************"
+!  print *, "Eigen-decomposition error = ", norm2(real(matmul(matmul(factor,
+!  exactExp),factorInv)) - real(Acopy))
+!   print *, "***********************************************"
+!   print *, "Factor inverse: ", norm2(real(matmul(factor, factorInv)) - iden)
+  exactExp = matmul(matmul(factor,exactExp), factorInv)
+
+  error = norm2(real(exactExp) - approxexpJac)
+
+  if (error > 1e-3) then
+     write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
+     write(iulog,*)'Please check that the exact matrix exponential in eos.F90 is actually exact'
+  else
+     if (hybrid%masterthread) write(iulog,*)&
+          'PASS. max error of analytic and exact matrix exponential: ', error
+  end if
+
+  end subroutine test_matrix_exponential_accuracy
+
+
+
+
 
 
 end module 
