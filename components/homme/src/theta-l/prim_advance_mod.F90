@@ -50,7 +50,8 @@ module prim_advance_mod
   private
   save
   public :: prim_advance_exp, prim_advance_init1, &
-       applycamforcing_dynamics, compute_andor_apply_rhs, matrix_exponential
+       applycamforcing_dynamics, compute_andor_apply_rhs, matrix_exponential,&
+       matrix_exponential2
 
 contains
 
@@ -816,9 +817,9 @@ contains
         phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
         call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
         call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+        JacL_elem(:,:,:,ie) = -JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = -JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = -JacD(:,:,:)
       end do
       !! g1 = v_m = u_m
 
@@ -2797,6 +2798,7 @@ contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   subroutine matrix_exponential(JacL, JacD, JacU, neg, dimDiag, dt, expJ, w)
   !===================================================================================
+  ! Using a Pade approximation,
   ! this subroutine calculates the matrix exponential of the matrix of the form
   !    [ 0       g*dt*T
   !      g*dt*I       0 ],
@@ -2885,8 +2887,8 @@ contains
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
-!  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac)  ! using full LU factorization
+!  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac)  ! using full LU factorization
 !  print *, "----------test------------------"
 !  print *, " diff in methods ", norm2(DinvN- expJ)
 !  print *, "-------------------------------"
@@ -3062,7 +3064,8 @@ contains
       do j = 1,np
         wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
         wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec)
+        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Pade approximation
+        call matrix_exponential2(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Taylor approximation
         elem(ie)%state%w_i(i,j,1:nlev,n0) = wphivec(1:nlev)
         elem(ie)%state%phinh_i(i,j,1:nlev,n0) = wphivec(1+nlev:2*nlev)
       end do
@@ -3070,6 +3073,68 @@ contains
   end do
 
   end subroutine expLdtwphi
+  subroutine matrix_exponential2(JacL, JacD, JacU, neg, dimDiag, dt, expJ, w)
+  !===================================================================================
+  ! Using a Taylor approximation,
+  ! this subroutine calculates the matrix exponential of the matrix of the form
+  !    [ 0       g*dt*T
+  !      g*dt*I       0 ],
+  ! where the tridiagonal matrix T is given by the input vectors JacL, JacD, and JacU
+  !
+  ! This matrix exponential is returned as expJ. The product (e^J)*w is also
+  ! calculated, and returned as w.
+  !===================================================================================
 
+  real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
+  logical, intent(in) :: neg
+  integer, intent(in) :: dimDiag
+  real (kind=real_kind), intent(in) :: dt
+  real (kind=real_kind), intent(out) :: expJ(2*dimDiag, 2*dimDiag)
+  real (kind=real_kind), dimension(:), intent(inout), optional :: w 
+  ! local variables
+  real (kind=real_kind) :: Aj(2*dimDiag,2*dimDiag), Jac(2*dimDiag,2*dimDiag)
+  real (kind=real_kind) :: work(2*dimDiag)
+  integer :: ipiv(2*dimDiag)
+  real (kind=real_kind) normJ, pfac, fac, alpha
+  integer i,j,p,info, maxiter, k, dimJac 
+
+  p = 10  ! number of terms in the series
+  ! Initialize random A and normalize
+  dimJac = 2*dimDiag
+  Jac = 0.d0
+  do i = 1,(dimDiag-1)
+    Jac(i,(i+dimDiag)) = JacD(i)
+    Jac(i,(i+1+dimDiag)) = JacU(i)
+    Jac((i+1),(i+dimDiag)) = JacL(i) 
+  end do
+  Jac(dimDiag, dimJac) = JacD(dimDiag)
+  do i = 1,dimDiag
+    Jac(i + dimDiag,i) = 1.d0
+  end do
+  Jac = Jac * g * dt
+  if (neg) then
+    Jac = (-1.d0)*Jac 
+  end if
+
+  ! Initialize Aj,negAj = identity and N,D = 0.
+  Aj = 0.d0
+  expJ = 0.d0
+
+  do i = 1,dimJac
+    Aj(i,i) = 1.d0
+  enddo ! end do loop
+
+  ! series for approximation
+  do i=0,p
+    expJ = expJ + 1/gamma(dble(i+1.d0))*Aj
+    Aj = matmul(Aj,Jac)
+  enddo ! end do loop for Pade approx
+
+  if (present(w)) then
+    w = matmul(expJ, w)
+  end if
+
+  end subroutine matrix_exponential2
+!
 
 end module prim_advance_mod

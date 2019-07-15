@@ -19,7 +19,7 @@ module model_init_mod
   use hybrid_mod,         only: hybrid_t
   use dimensions_mod,     only: np,nlev,nlevp
   use eos          ,      only: pnh_and_exner_from_eos,get_dirk_jacobian
-  use prim_advance_mod,   only: matrix_exponential
+  use prim_advance_mod,   only: matrix_exponential, matrix_exponential2
   use element_state,      only: timelevels, nu_scale_top
   use viscosity_mod,      only: make_c0_vector
   use kinds,              only: real_kind,iulog
@@ -71,7 +71,7 @@ contains
          call test_imex_jacobian(elem,hybrid,hvcoord,tl,nets,nete)
 
     ! unit test for matrix exponential
-    call test_matrix_exponential2(hybrid)
+!    call test_matrix_exponential2(hybrid)
 
     ! unit test for mat_exp accuracy
     call test_matrix_exponential_accuracy(hybrid)
@@ -418,7 +418,7 @@ contains
   real (kind=real_kind) :: JacL(19), JacU(19), JacD(20), rwork(80)
   integer, dimension(40) :: ipiv
   real (kind = real_kind) :: error
-  integer :: n, info, i
+  integer :: n, info, i,p
 
   if (hybrid%masterthread) write(iulog,*)'Testing accuracy of Pade approx...'
   JacL = (/ 3.757951454493374d-3, 3.819276450619194d-3, 3.880299668323407d-3,&
@@ -445,8 +445,6 @@ contains
      4.875506026223682d-3, 4.932808758394314d-3, 4.989827532103520d-3,&
      5.046561644173274d-3/)
 
-! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU,.false.,20,1.d0, approxexpJac)
   ! Form matrix A
 
   A = 0.d0
@@ -504,16 +502,16 @@ contains
 !  print *, "entry of exact =  ", exactExp(1,1)
 !  print *, "entry of approx =  ", approxexpJac(1,1)
 !  stop
-  error = norm2(real(exactExp) - approxexpJac)
-
-  if (error > 1e-3) then
-     write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
-     write(iulog,*)'Please check that the exact matrix exponential in eos.F90 is actually exact'
-  else
-     if (hybrid%masterthread) write(iulog,*)&
+! Rational approximation
+    call matrix_exponential2(JacL, JacD, JacU,.false.,20,1.d0, approxexpJac)
+    error = norm2(real(exactExp) - approxexpJac)
+    if (error > 1e-3) then 
+      write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
+      write(iulog,*)'Please check that the exact matrix exponential in eos.F90 is actually exact'
+    else
+      if (hybrid%masterthread) write(iulog,*)&
           'PASS. max error of analytic and exact matrix exponential: ', error
-  end if
-
+    end if
   end subroutine test_matrix_exponential_accuracy
 
 
