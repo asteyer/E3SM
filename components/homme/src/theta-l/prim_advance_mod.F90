@@ -94,6 +94,7 @@ contains
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
     integer :: n,i,j,maxiter
  ! New variables that I am adding.
+    real (kind=real_kind) :: a21,a32,a43,a54,a65,a61,c2,c3,c4,c5
     real (kind=real_kind) :: wphivec(2*nlev)
     real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
     real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
@@ -849,6 +850,71 @@ contains
       !! Ump1 = exp(Ldt)vmp1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
 !==========================================================================================================
+    elseif (tstep_type == 18) then ! Third order RK method
+      a21 = 1.d0/5.d0
+      a32 = 1.d0/5.d0
+      a43 = 1.d0/3.d0
+      a54 = 2.d0/3.d0
+      a61 = 1.d0/4.d0
+      a65 = 3.d0/4.d0
+      c2 = 1.d0/5.d0
+      c3 = 1.d0/5.d0
+      c4 = 1.d0/3.d0
+      c5 = 2.d0/3.d0
+
+      ! Compute JacL, JacD, and JacU
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+      !! g1 = v_m = u_m
+      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete) ! move to np1
+
+      !! g2 = vm + a21*dt*N(v_m)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call linear_combination_of_elem(np1,1.d0,n0,a21*dt,nm1,elem,nets,nete)
+
+      !! g3 = vm + a32*dt*exp(-L*dt*c2)N(exp(L*dt*c2)*g2)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c2,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c2)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c2,nets,nete)
+      call linear_combination_of_elem(np1, 1.d0,n0,a32*dt,np1,elem,nets,nete)
+
+      !! g4 = vm + a43*dt*exp(-Ldt*c3)*N(exp(L*dt*c3)g3)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c3,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c3)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c3,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,dt*a43,np1,elem,nets,nete)
+
+      !! g5 = vm + a54*dt*exp(-Ldt*c4)*N(exp(L*dt*c4)g4)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c4,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c4)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c4,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,dt*a54,np1,elem,nets,nete)
+
+      !! g6 = vm + a61*dt*N(g1)+a65*dt*exp(-Ldt*c5)*N(exp(L*dt*c5)g5)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c5,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c5)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c5,nets,nete)
+
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call linear_combination_of_elem(nm1,1.d0,n0,a61*dt,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,nm1,a65*dt,np1,elem,nets,nete)
+
+      !! Ump1 = exp(Ldt)vmp1
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
 
 !!==========================================================================================================
     else
