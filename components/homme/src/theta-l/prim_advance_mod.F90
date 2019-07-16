@@ -879,7 +879,7 @@ contains
       !! g2 = vm + a21*dt*N(v_m)
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call linear_combination_of_elem(np1,1.d0,n0,a21*dt,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,a21*dt,np1,elem,nets,nete)
 
       !! g3 = vm + a32*dt*exp(-L*dt*c2)N(exp(L*dt*c2)*g2)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c2,nets,nete)
