@@ -25,3 +25,10 @@ buildlibc
 
 # Ignore emacs backup files
 *~
+
+# Ignore auxiliary LaTeX files
+*.aux
+*.bbl
+*.blg
+*.log
+*.pdf
