@@ -17,7 +17,8 @@
 
 % This controls the table-of-contents entry in the proceedings. Edit it
 % to include your article title followed by the authors' names, as shown.
-\addcontentsline{toc}{chapter}{Exponential Integrators for the Energy Exascale Earth System Model\\
+\addcontentsline{toc}{chapter}{Exponential Integrators for the Energy 
+Exascale Earth System Model\\
 {\em C.F.\ Krause and A.J.\ Steyer}}
 
 \pagestyle{myheadings}
@@ -33,42 +34,58 @@
 \title{Exponential Integrators for the Energy Exascale Earth System Model}
 
 % List each author, their affiliation, and their e-mail address, as shown.
-\author{Cassidy F.\ Krause\thanks{University of Kansas, ckrause@ku.edu} \and Andrew J.\ Steyer\thanks{Sandia National Laboratories,
-asteyer@sandia.gov}}
+\author{Cassidy F.\ Krause\thanks{University of Kansas, ckrause@ku.edu}
+\and Andrew J.\ Steyer\thanks{Sandia National Laboratories, asteyer@sandia.gov}}
 
 \begin{document}
-
-
-
 \maketitle
 
 % Include your abstract here.
 \begin{abstract}
-The HOMME-NH nonhydrostatic atmosphere model has a system of stiff ODEs, which are currently solved in an implicit-explicit (IMEX) Runge-Kutta (RK) methods. We investigate the use of exponential-type integrators to solve these stiff equations, and study their performance.
+The HOMME-NH nonhydrostatic atmosphere model has a system of stiff ODEs, 
+which are currently solved using implicit-explicit (IMEX) Runge-Kutta (RK) 
+methods. We investigate the use of exponential-type integrators to solve 
+these stiff equations, and study their performance.
 \end{abstract}
 
 \section{Introduction} \label{CFK:sec:intro}
-Stiff ODEs are notorious for requiring a very small step size when solved explicitly. Because this restriction can make algorithms quite inefficient, two different methods have been developed for dealing with these problems. 
+Stiff ODEs are notorious for requiring a very small step size when solved 
+explicitly. Because this restriction can make algorithms quite inefficient,
+ two different methods have been developed for dealing with these problems. 
 
-Suppose we have an ODE given by 
-\[ f(u) = s(u) + n(u),\] where $s(u)$ contains the stiff part of the equation, and $n(u)$ contains the nonstiff part. 
-One way to deal with this problem is to use an implicit Runge-Kutta method on the stiff part, and an explicit Runge-Kutta on the nonstiff part. 
-This is the current method used in the HOMME-NH nonhydrostatic atmosphere model of the E3SM, and it performs quite well.
+Suppose we have an ODE given by \[ f(u) = s(u) + n(u),\] where $s(u)$ 
+contains the stiff part of the equation, and $n(u)$ contains the nonstiff 
+part. One way to deal with this problem is to use an implicit Runge-Kutta
+method on the stiff part, and an explicit Runge-Kutta on the nonstiff part. 
+This is the current method used in the HOMME-NH nonhydrostatic atmosphere 
+model of the E3SM, and it performs quite well.
 
-Another approach is to use an exponential-type integrator, such as integrating factor Runge-Kutta methods (IFRKs). In this case, we split our method as
-\[ f(u) = Lu + N(u),\] where $L$ is a linear operator containing the stiff part of the ODE, and $N(u) = f(u) - Lu$ contains the nonstiff terms. Often, $L = f'(u)$, but we do not assume this is the case. 
+Another approach is to use an exponential-type integrator, such as 
+integrating factor Runge-Kutta methods (IFRKs). In this case, we split our
+ method as \[ f(u) = Lu + N(u),\] where $L$ is a linear operator containing
+ the stiff part of the ODE, and $N(u) = f(u) - Lu$ contains the nonstiff 
+terms. Often, $L = f'(u)$, but we do not assume this is the case. 
 
 Using the change of variables $v(t) = e^{-L(t-t_m)}u(t)$, we have
-\begin{equation}\label{CFK:eqn:transformation}
+\begin{equation}\label{CFK:eqn:vode}
 v_t = e^{-L(t-t_m)}N(e^{L(t-t_m)}v).
 \end{equation} 
-We can then apply an $r-$stage Runge-Kutta method to solve \ref{CFK:eqn:transformation}. In this paper, we implement these exponential-type methods in the HOMME-NH model as a feasible alternative to the IMEX Runge-Kutta methods.
+We can then apply an $r-$stage Runge-Kutta method to solve 
+\ref{CFK:eqn:vode}, as discussed in section \ref{CFK:sec:implementation}. 
+In this paper, we implement these exponential-type methods in the HOMME-NH
+ model as a feasible alternative to the IMEX Runge-Kutta methods.
 
-The rest of the paper is structured as follows: In section \ref{CFK:sec:homme}, we give a brief background of the non-hydrostatic model; 
-section \ref{CFK:sec:matexp} discusses exponential integrator methods; and numerical results are given in section \ref{CFK:sec:results}
+The rest of the paper is structured as follows: In section 
+\ref{CFK:sec:homme}, we give a brief background of the non-hydrostatic 
+model; section \ref{CFK:sec:matexp} discusses exponential integrator 
+methods; the implementation of these methods is given in section 
+\ref{CFK:sec:implementation}; and numerical results are given in section 
+\ref{CFK:sec:results}.
 
 \section{HOMME-NH}\label{CFK:sec:homme}
-In the HOMME-NH model, we employ a horizontally explicit, vertically implicit (HEVI) partitioning. Choosing to linearize around the stiffly treated terms, we can write the governing equations as
+In the HOMME-NH model, we employ a horizontally explicit, vertically 
+implicit (HEVI) partitioning. Choosing to linearize around the stiffly 
+treated terms, we can write the governing equations as
 \[q_t \coloneqq \begin{bmatrix} u_t \\
 w_t\\
 \phi_t\\
@@ -79,7 +96,9 @@ w_t\\
 -\CFKg (1-\mu)\\
 \CFKg w\\
 0\\
-0\end{bmatrix},\] where $w, u,\phi, \theta,$ and $\frac{\partial \pi}{\partial \eta}$ are the state variables in the HOMME-NH model, as listed in table \ref{CFK:tab:variables}.
+0\end{bmatrix},\] 
+where $w, u,\phi, \theta,$ and $\frac{\partial \pi}{\partial \eta}$ are the
+ state variables in the HOMME-NH model, as listed in table \ref{CFK:tab:variables}.
 
 \begin{table}
   \caption{Variables in HOMME-NH}
@@ -111,14 +130,25 @@ So, forming $e^{\alpha J}$ reduces to forming an exponential of
 \[ \begin{bmatrix}
    0              & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} \\
  \CFKg \Delta t I & 0  \end{bmatrix},\]
-where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. The most computationally expensive part of exponential-type methods is forming the matrix exponential; 
-as discussed in the next section, we are able to leverage the structure of this particular Jacobian in order to develop methods that are competitive with the currently implemented IMEX Runge-Kutta methods.
+where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. The most 
+computationally expensive part of exponential-type methods is forming the 
+matrix exponential; as discussed in the next section, we are able to 
+leverage the structure of this particular Jacobian in order to develop 
+methods that are competitive with the currently implemented IMEX Runge-
+Kutta methods.
 
 \subsection{The Matrix Exponential}\label{CFK:sec:matexp} 
-One can form the matrix exponential analytically if the matrix $A$ is diagonalizable, but finding the eigenvalues of $A$ is expensive, and it is not generally guaranteed that $A$ is diagonalizable.
-A more general approach is to approximate $e^{A}$ using a Pad\'e or Taylor series approximation. Other methods of approximating the matrix exponential are discussed in \cite{CFK:Moler2003}.
+One can form the matrix exponential analytically if the matrix $A$ is 
+diagonalizable, but finding the eigenvalues of $A$ is expensive, and it is
+ not generally guaranteed that $A$ is diagonalizable. A more general 
+approach is to approximate $e^{A}$ using a Pad\'e or Taylor series 
+approximation. Other methods of approximating the matrix exponential are 
+discussed in \cite{CFK:Moler2003}.
 
-We choose to implement a $(p,q)$ Pad\'e approximation $e^{A}\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, where $P_{pq}(A)$ and $Q_{pq}(A)$ are defined as follows:
+We choose to implement a $(p,q)$ Pad\'e approximation 
+$e^{A}\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, where $P_{pq}(A)$ and 
+$Q_{pq}(A)$ are defined as follows:
+
 \begin{align*}
 P_{pq}(A) &= \sum_{j=1}^p\frac{(p+q-j)!p!}{(p+q)!j!(p-j)!}A^j\\
 Q_{pq}(A) &= \sum_{j=1}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j
@@ -127,21 +157,32 @@ Q_{pq}(A) &= \sum_{j=1}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j
 The error for this approximation is given by
 \[ e^A - \left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(A^{p+q+1}).\]
 
-If the matrix $A$ has eigenvalues that are spread far apart, this approximation can be rather inaccuarate. 
-To mitigate this problem, we implement a scaling and squaring approach. Because of the properties of matrix exponentials, we can write
+If the matrix $A$ has eigenvalues that are spread far apart, this 
+approximation can be rather inaccuarate. To mitigate this problem, we 
+implement a scaling and squaring approach. Because of the properties of 
+matrix exponentials, we can write
 \[e^{A} = \left(e^{A/k}\right)^k,\]
-where $k$ is chosen to be the smallest power of $2$ so that $\|A/k\| \leq 0.5$.
-With this factorization, the matrix $A$ is scaled down to $A/k$, and the matrix exponential $e^{A/k}$ is calculated using the formulas above. This matrix exponential is then squared repeatedly to recover the desired matrix exponential $e^{A}$.
+where $k$ is chosen to be the smallest power of $2$ so that 
+$\|A/k\| \leq 0.5$. With this factorization, the matrix $A$ is scaled down
+ to $A/k$, and the matrix exponential $e^{A/k}$ is calculated using the 
+formulas above. This matrix exponential is then squared repeatedly to 
+recover the desired matrix exponential $e^{A}$.
 
-Once the terms $P_{pq}$ and $Q_{pq}$ are calculated, the product $\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ is a potentially expensive computation.
-Fortunately, for our problem, the matrix $A$ we consider has a special structure. It is of the form \[A= \begin{bmatrix} 0 & \alpha T\\
+Once the terms $P_{pq}$ and $Q_{pq}$ are calculated, the product 
+$\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ is a potentially expensive 
+computation. Fortunately, for our problem, the matrix $A$ we consider has a
+ special structure. It is of the form 
+\[A= \begin{bmatrix} 0 & \alpha T\\
   \alpha I & 0 \end{bmatrix},\]
-where $T$ is tridiagonal. This form allows us to solve $\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ using tridiagonal solves and back substitution.
+where $T$ is tridiagonal. This form allows us to solve 
+$\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ using tridiagonal solves and back 
+substitution.
 
 To do so, we first factor $Q_{pq}(A)$ as
 \[ Q_{pq}(A) = \prod_{j=1}^q\left[\sigma_jI-A\right]\text{, where }\sigma_j\in \mathbb{C}\text{ for }j=1,\dots,q.\]
 
-Then, since we want to solve for $R \coloneqq \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, we have
+Then, since we want to solve for 
+$R \coloneqq \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, we have
 \begin{align*}
 Q_{pq}(A) R &= P_{pq}(A)\\
 \prod_{j=1}^q\left[\sigma_jI-A\right]R &= P_{pq}(A).
@@ -149,17 +190,31 @@ Q_{pq}(A) R &= P_{pq}(A)\\
 
 Define $R_1 \coloneqq \left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R$.
 Then our equation becomes
-\[ \left[\sigma_1I-A\right]R_1 = P_{pq}(A).\] Since $\left[\sigma_1I-A\right]$ is a tridiagonal matrix, we can solve for $R_1$ using far fewer operations than if $\left[\sigma_1I-A\right]$ were a full matrix.
+\[ \left[\sigma_1I-A\right]R_1 = P_{pq}(A).\] Since $\left[\sigma_1I-A\right]$ 
+is a tridiagonal matrix, we can solve for $R_1$ using far fewer operations
+ than if $\left[\sigma_1I-A\right]$ were a full matrix.
 
 Now we have
-\[\left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R = R_1.\] We can continue in this way, defining $R_j \coloneqq \left[\sigma_{j+1}I-A\right]\left[\sigma_{j+2}I-A\right]\cdots\left[\sigma_qI-A\right]R$ and solving
-\[\left[\sigma_jI-A\right]R_j = R_{j-1}\] for $R_j$, until we arive at
-\[\left[\sigma_qI-A\right]R = R_{q-1}.\] Solving this last tridiagonal system gives us the $R = \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ that we are looking for.
+\[\left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R = R_1.\] 
+We can continue in this way, defining 
+$R_j \coloneqq \left[\sigma_{j+1}I-A\right]\left[\sigma_{j+2}I-A\right]\cdots\left[\sigma_qI-A\right]R$
+ and solving
+\[\left[\sigma_jI-A\right]R_j = R_{j-1}\] 
+for $R_j$, until we arive at
+\[\left[\sigma_qI-A\right]R = R_{q-1}.\] 
+Solving this last tridiagonal system gives us the $R = \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$
+ that we are looking for.
 
-This approach is particularly efficient if the values of $p$ and $q$ are small, so that we can analytically find $\{\sigma_j\}_{j=1}^q$ ahead of time.
-Of course, approximations like this do rather poorly for ill-conditioned matrices, so we must validate that these approximations work for the Jacobians we are interested in.
-To validate the Pad\'e approximation, we let the model spin up to $3600$ seconds. The Jacobian we are considering at this time has unique eigenvalues, so we can calculate the matrix exponential analytically, and compare it to our approximation.
-The following table gives the results of several Pad\'e approximations, depending on the number of terms used in the series.
+This approach is particularly efficient if the values of $p$ and $q$ are 
+small, so that we can analytically find $\{\sigma_j\}_{j=1}^q$ ahead of 
+time. Of course, approximations like this do rather poorly for ill-
+conditioned matrices, so we must validate that these approximations work 
+for the Jacobians we are interested in. To validate the Pad\'e 
+approximation, we let the model spin up to $3600$ seconds. The Jacobian 
+we are considering at this time has unique eigenvalues, so we can calculate
+ the matrix exponential analytically, and compare it to our approximation.
+The following table gives the results of several Pad\'e approximations, 
+depending on the number of terms used in the series.
 \begin{table}[ht]
   \begin{center}
     \caption{Error of Pad\'e Approximation}
@@ -177,9 +232,42 @@ The following table gives the results of several Pad\'e approximations, dependin
   \end{center}
 \end{table}
 
-Since a (22)-Pad\'e approximation yields a considerably accurate matrix exponential and also gives the benefit of taking advantage of the tridiagonal structure, we choose to implement this method.
+Since a (22)-Pad\'e approximation yields a considerably accurate matrix 
+exponential and also gives the benefit of taking advantage of the 
+tridiagonal structure, we choose to implement this method.
 
-\newpage
+\section{Implementation}\label{CFK:sec:implementation}
+We consider several explicit Runge-Kutta methods to solve equation 
+\ref{CFK:eqn:vode}. We consider several Runge-Kutta methods given by the 
+following Butcher tableaux:
+\[
+ \begin{array}{c|ccc}
+0   & 0   & 0 & 0\\
+1/2 & 1/2 & 0 & 0\\
+1   & 0   & 1 & 0\\
+\hline
+    & 0   & 1 & 0
+\end{array}\qquad
+\begin{array}{c|cccc}
+0   & 0   & 0   & 0 & 0\\
+1/2 & 1/2 & 0   & 0 & 0\\
+1/2 & 0   & 1/2 & 0 & 0\\
+1   & 0   & 0   & 1 & 0\\
+\hline
+    & 0   & 0   & 1 & 0
+\end{array}\qquad
+\begin{array}{c|cccccc}
+0   & 0   & 0   & 0   & 0   & 0   & 0\\
+1/5 & 1/5 & 0   & 0   & 0   & 0   & 0\\
+1/5 & 0   & 1/5 & 0   & 0   & 0   & 0\\
+1/3 & 0   & 0   & 1/3 & 0   & 0   & 0\\
+2/3 & 0   & 0   & 0   & 2/3 & 0   & 0\\
+1   & 1/4 & 0   & 0   & 0   & 3/4 & 0\\
+\hline
+    & 1/4 & 0   & 0   & 0   & 3/4 & 0
+\end{array}
+\]
+
 \section{Results}\label{CFK:sec:results}
 
 \section{Conclusions}
