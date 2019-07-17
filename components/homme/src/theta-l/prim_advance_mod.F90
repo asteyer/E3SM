@@ -764,6 +764,7 @@ contains
 !==========================================================================================================
 !===================================================================================
     elseif (tstep_type == 16) then ! Integrating factor method - second approach to 13
+       a1 = 1.d0/2.d0
 
        ! Compute JacL, JacD, and JacU
        do ie = nets,nete
@@ -779,31 +780,19 @@ contains
       
 
       !! g1 = vm = um
-     
-      !! Form g2 = vm + dt*exp(-Ldt)N(exp(Ldt)vm) and store in np1
-      ! Move n0 to np1
-      call linear_combination_of_elem(np1,1.d0, n0, 0.d0, np1, elem,nets,nete)
-      ! Compute exp(Ldt)vm and store in np1
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
 
-      ! Compute N(exp(Ldt)vm) and store in nm1
+      !! Form g2 = vm + dt*N(vm) and store in np1
       call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
-     ! Compute exp(-Ldt)N(exp(Ldt)vm) and store in nm1
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt,nets,nete)
-    ! Form linear combination to get g2 and store in np1.
-      call linear_combination_of_elem(np1,1.d0, n0, dt, nm1, elem,nets,nete)
+       deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call linear_combination_of_elem(np1,1.d0,n0,dt*a1,nm1,elem,nets,nete)
 
       !! Form vmp1 = g3 = vm + dt*exp(-Ldt)N(exp(Ldt)g2)
-      ! Compute exp(Ldt)g2 and store in np1
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
-     ! Compute N(exp(Ldt)g2) and store in nm1
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*a1,nets,nete)
       call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-    ! Compute exp(-Ldt)N(exp(Ldt)g2 and store in nm1
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt,nets,nete)
-      ! Compute linear combination to get g3 and store in np1.
-      call linear_combination_of_elem(np1, 1.d0, n0, dt, nm1, elem,nets,nete)
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*a1,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,dt,nm1,elem,nets,nete)
 
   !! Compute ump1 = exp(Ldt)vnmp  = exp(Ldt)g3
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
@@ -818,34 +807,31 @@ contains
         phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
         call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
         call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = -JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = -JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = -JacD(:,:,:)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
       end do
       !! g1 = v_m = u_m
-
-      !! g2 = vm + 1/2 dt exp(-L*dt/2)N(exp(L*dt/2)*v_m)
-      ! calculate v_m/2
       call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*a1,nets,nete)
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*a1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,a1*dt,nm1,elem,nets,nete)
+
+      !! g2 = vm + 1/2 dt N(v_m)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call linear_combination_of_elem(np1,1.d0,n0,a1*dt,np1,elem,nets,nete)
 
       !! g3 = vm + 1/2 dt exp(-L*dt/2)N(exp(L*dt/2)*g2)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*a1,nets,nete)
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*a1,nets,nete)
-      call linear_combination_of_elem(np1, 1.d0,n0,a1*dt,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*a1,nets,nete)
+      call linear_combination_of_elem(np1, 1.d0,n0,a1*dt,np1,elem,nets,nete)
 
-      !! g4 = vm + dt*exp(-Ldt)*N(exp(Ldt)g3)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,dt,nm1,elem,nets,nete)
+      !! g4 = vm + dt*exp(-Ldt/2)*N(exp(Ldt/2)g3)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*a1,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*a1,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,dt,np1,elem,nets,nete)
 
       !! Ump1 = exp(Ldt)vmp1
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
