@@ -932,57 +932,49 @@ contains
       end do
       !! g1 = v_m = u_m
       call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete) ! move to np1
-      call store_state(elem,np1,nets,nete,stage1)
 
       !! g2 = vm + a21*dt*N(v_m)
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call store_state(elem,np1,nets,nete,stage1)
       call linear_combination_of_elem(np1,1.d0,n0,a21*dt,np1,elem,nets,nete)
-      call store_state(elem,np1,nets,nete,stage2)
 
       !! g3 = vm + a32*dt*exp(-L*dt*c2)N(exp(L*dt*c2)*g2)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c2,nets,nete)
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c2)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c2,nets,nete)
+      call store_state(elem,np1,nets,nete,stage2)
       call linear_combination_of_elem(np1, 1.d0,n0,a32*dt,np1,elem,nets,nete)
-      call store_state(elem,np1,nets,nete,stage3)
 
       !! g4 = vm + a43*dt*exp(-Ldt*c3)*N(exp(L*dt*c3)g3)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c3,nets,nete)
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c3)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c3,nets,nete)
+      call store_state(elem,np1,nets,nete,stage3)
       call linear_combination_of_elem(np1,1.d0,n0,dt*a43,np1,elem,nets,nete)
+
+      !! Calculate exp(-Ldt*c4)*N(exp(L*dt*c4)g4)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c4,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c4)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c4,nets,nete)
       call store_state(elem,np1,nets,nete,stage4)
 
       !! vmp1 = vm + b1*dt*N(g1) + b2*dt*exp(-Ldt*c2)*N(exp(Ldt*c2)g2) +
       !             b3*dt*exp(-Ldt*c3)*N(exp(Ldt*c3)g3) + b4*dt*exp(-Ldt*c4)*N(exp(Ldt*c4)g4)
            ! First, vm + b1 term
       call retrieve_state(stage1,elem,nm1,nets,nete)
-      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
       call linear_combination_of_elem(np1,1.d0,n0,b1*dt,nm1,elem,nets,nete) 
            ! Second, add b2 term
       call retrieve_state(stage2,elem,nm1,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt*c2,nets,nete)
-      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c2)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*c2,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,b2*dt,nm1,elem,nets,nete)
            ! Add b3 term
       call retrieve_state(stage3,elem,nm1,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt*c3,nets,nete)
-      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c3)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*c3,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,b3*dt,nm1,elem,nets,nete)
            ! Add b4 term
       call retrieve_state(stage4,elem,nm1,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt*c4,nets,nete)
-      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c4)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*c4,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,b4*dt,nm1,elem,nets,nete)
 
       !! Ump1 = exp(Ldt)vmp1
