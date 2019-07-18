@@ -94,7 +94,11 @@ contains
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
     integer :: n,i,j,maxiter
  ! New variables that I am adding.
-    real (kind=real_kind) :: a21,a32,a43,a54,a65,a61,c2,c3,c4,c5
+    real (kind=real_kind) :: stage1(nets:nete,np,np,nlevp,6),&
+                                stage2(nets:nete,np,np,nlevp,6),&
+                                stage3(nets:nete,np,np,nlevp,6),&
+                                stage4(nets:nete,np,np,nlevp,6)
+    real (kind=real_kind) :: a21,a32,a43,a54,a65,a61,c2,c3,c4,c5,b1,b2,b3,b4
     real (kind=real_kind) :: wphivec(2*nlev)
     real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
     real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
@@ -903,6 +907,89 @@ contains
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
 
 !!==========================================================================================================
+    elseif (tstep_type == 19) then ! Fourth order RK method
+      a21 = 1.d0/2.d0
+      a32 = 1.d0/2.d0
+      a43 = 1.d0
+      c2  = 1.d0/2.d0
+      c3  = 1.d0/2.d0
+      c4  = 1.d0
+      b1  = 1.d0/6.d0
+      b2  = 1.d0/3.d0
+      b3  = 1.d0/3.d0
+      b4  = 1.d0/6.d0
+
+      ! Compute JacL, JacD, and JacU
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+      !! g1 = v_m = u_m
+      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete) ! move to np1
+      call store_state(elem,np1,nets,nete,stage1)
+
+      !! g2 = vm + a21*dt*N(v_m)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call linear_combination_of_elem(np1,1.d0,n0,a21*dt,np1,elem,nets,nete)
+      call store_state(elem,np1,nets,nete,stage2)
+
+      !! g3 = vm + a32*dt*exp(-L*dt*c2)N(exp(L*dt*c2)*g2)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c2,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c2)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c2,nets,nete)
+      call linear_combination_of_elem(np1, 1.d0,n0,a32*dt,np1,elem,nets,nete)
+      call store_state(elem,np1,nets,nete,stage3)
+
+      !! g4 = vm + a43*dt*exp(-Ldt*c3)*N(exp(L*dt*c3)g3)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt*c3,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c3)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.true.,dt*c3,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,dt*a43,np1,elem,nets,nete)
+      call store_state(elem,np1,nets,nete,stage4)
+
+      !! vmp1 = vm + b1*dt*N(g1) + b2*dt*exp(-Ldt*c2)*N(exp(Ldt*c2)g2) +
+      !             b3*dt*exp(-Ldt*c3)*N(exp(Ldt*c3)g3) + b4*dt*exp(-Ldt*c4)*N(exp(Ldt*c4)g4)
+           ! First, vm + b1 term
+      call retrieve_state(stage1,elem,nm1,nets,nete)
+      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call linear_combination_of_elem(np1,1.d0,n0,b1*dt,nm1,elem,nets,nete) 
+           ! Second, add b2 term
+      call retrieve_state(stage2,elem,nm1,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt*c2,nets,nete)
+      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c2)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*c2,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,b2*dt,nm1,elem,nets,nete)
+           ! Add b3 term
+      call retrieve_state(stage3,elem,nm1,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt*c3,nets,nete)
+      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c3)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*c3,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,b3*dt,nm1,elem,nets,nete)
+           ! Add b4 term
+      call retrieve_state(stage4,elem,nm1,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt*c4,nets,nete)
+      call compute_nonlinear_rhs(nm1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c4)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.true.,dt*c4,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,b4*dt,nm1,elem,nets,nete)
+
+      !! Ump1 = exp(Ldt)vmp1
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
+
+!!==========================================================================================================
+ !==========================================================================================================
     else
       call abortmp('ERROR: bad choice of tstep_type')
     endif
@@ -3187,6 +3274,54 @@ contains
   end if
 
   end subroutine matrix_exponential2
-!
 
+!=========================================================================
+! Stores elem(np1) in mdarray "stage"
+!=========================================================================
+  subroutine store_state(elem,np1,nets,nete,stage)
+  
+  type(element_t), intent(in) :: elem(:)
+  integer, intent(in) :: np1, nets, nete
+  real (kind=real_kind), intent(out) :: stage(nete-nets+1,np,np,nlevp,6)
+
+  ! local variables
+  integer :: ie
+
+  do ie = nets, nete
+    stage(ie,:,:,1:nlev,1) = elem(ie)%state%v(:,:,1,:,np1)
+    stage(ie,:,:,1:nlev,2) = elem(ie)%state%v(:,:,2,:,np1)
+    stage(ie,:,:,:,3)      = elem(ie)%state%w_i(:,:,:,np1)
+    stage(ie,:,:,:,4)      = elem(ie)%state%phinh_i(:,:,:,np1)
+    stage(ie,:,:,1:nlev,5) = elem(ie)%state%vtheta_dp(:,:,:,np1)
+    stage(ie,:,:,1:nlev,6) = elem(ie)%state%dp3d(:,:,:,np1)
+  end do
+
+  end subroutine store_state
+
+
+
+!==========================================================================
+! Retrieves mdarray "stage" and stores at elem(nm1)
+!==========================================================================
+  subroutine retrieve_state(stage,elem,nm1,nets,nete)
+  
+  real (kind=real_kind), intent(in) :: stage(nete-nets+1,np,np,nlevp,6)
+  type(element_t), intent(inout)    :: elem(:)
+  integer, intent(in)               :: nm1,nets,nete
+
+  ! local variables
+  integer :: ie
+
+  do ie = nets,nete
+    elem(ie)%state%v(:,:,1,:,nm1)       = stage(ie,:,:,1:nlev,1)
+    elem(ie)%state%v(:,:,2,:,nm1)       = stage(ie,:,:,1:nlev,2)
+    elem(ie)%state%w_i(:,:,:,nm1)       = stage(ie,:,:,:,3)
+    elem(ie)%state%phinh_i(:,:,:,nm1)   = stage(ie,:,:,:,4)
+    elem(ie)%state%vtheta_dp(:,:,:,nm1) = stage(ie,:,:,1:nlev,5)
+    elem(ie)%state%dp3d(:,:,:,nm1)      = stage(ie,:,:,1:nlev,6)
+  end do
+
+  end subroutine retrieve_state
+
+!============================================================================
 end module prim_advance_mod
