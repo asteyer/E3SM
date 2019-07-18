@@ -2961,10 +2961,11 @@ contains
   real (kind=real_kind) :: work(2*dimDiag)
   integer :: ipiv(2*dimDiag)
   real (kind=real_kind) normJ, pfac, fac, alpha
-  integer i,j,p,info, maxiter, k, dimJac 
+  integer i,j,p,q,info, maxiter, k, dimJac 
 
-  p = 2  ! parameter used in diagonal Pade approximation
-  pfac = gamma(dble(p+1.d0))/gamma(dble(2.d0*p+1.d0))
+  p = 3  ! parameter used in diagonal Pade approximation
+  q = 4
+  pfac = 1.d0/gamma(dble(p+q+1.d0))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
   Jac = 0.d0
@@ -3018,11 +3019,15 @@ contains
 
   ! series for Pade approximation
   do i=0,p
-    fac = gamma(dble(2.d0*p-i+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(p-i+1.d0)))*pfac
-    D = D + fac*negAj
+    fac = gamma(dble(p+q-i+1.d0))*gamma(dble(p+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(p-i+1.d0)))*pfac
     N = N + fac*Aj
-    negAj = matmul(negAj,-Jac)
     Aj = matmul(Aj,Jac)
+  enddo ! end do loop for Pade approx
+
+  do i=0,q
+    fac = gamma(dble(p+q-i+1.d0))*gamma(dble(q+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(q-i+1.d0)))*pfac
+    D = D + fac*negAj
+    negAj = matmul(negAj,-Jac)
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
@@ -3203,8 +3208,8 @@ contains
       do j = 1,np
         wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
         wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-!        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Pade approximation
-        call matrix_exponential2(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Taylor approximation
+        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Pade approximation
+!        call matrix_exponential2(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ,wphivec) ! Taylor approximation
         elem(ie)%state%w_i(i,j,1:nlev,n0) = wphivec(1:nlev)
         elem(ie)%state%phinh_i(i,j,1:nlev,n0) = wphivec(1+nlev:2*nlev)
       end do
