@@ -42,10 +42,15 @@ Exascale Earth System Model\\
 
 % Include your abstract here.
 \begin{abstract}
-The HOMME-NH nonhydrostatic atmosphere model has a system of stiff ODEs, 
+The HOMME-NH nonhydrostatic atmosphere model has a system of stiff ODEs 
 which are currently solved using implicit-explicit (IMEX) Runge-Kutta (RK) 
-methods. We investigate the use of exponential-type integrators to solve 
-these stiff equations, and study their performance.
+methods. We introduce a horizontally explicit - vertically integrating 
+factor exponential method (HEVI-Exponential) as an alternative to solving 
+these stiff equations. The main drawback to exponential methods is the cost
+of forming the matrix exponential. Here, we show that we can mitigate this 
+cost by taking advantage of the tridiagonal-like form of our Jacobian and 
+parallelizing our computations, making this solver an attractive option for
+HOMME-NH.
 \end{abstract}
 
 \section{Introduction} \label{CFK:sec:intro}
