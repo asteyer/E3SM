@@ -150,7 +150,7 @@ approach is to approximate $e^{A}$ using a Pad\'e or Taylor series
 approximation. Other methods of approximating the matrix exponential are 
 discussed in \cite{CFK:Moler2003}.
 
-We choose to implement a $(p,q)$ Pad\'e approximation 
+We choose to implement a $(p,q)$-Pad\'e approximation 
 $e^{A}\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, where $P_{pq}(A)$ and 
 $Q_{pq}(A)$ are defined as follows:
 
@@ -215,18 +215,19 @@ small, so that we can analytically find $\{\sigma_j\}_{j=1}^q$ ahead of
 time. Of course, approximations like this do rather poorly for ill-
 conditioned matrices, so we must validate that these approximations work 
 for the Jacobians we are interested in. To validate the Pad\'e 
-approximation, we let the model spin up to $3600$ seconds. The Jacobian 
-we are considering at this time has unique eigenvalues, so we can calculate
- the matrix exponential analytically, and compare it to our approximation.
-The following table gives the results of several Pad\'e approximations, 
-depending on the number of terms used in the series.
+approximation, we let the model spin up and consider the Jacobian at that
+time. For this model, our Jacobian will have unique, purely imaginary
+eigenvalues, so we can calculate the matrix exponential analytically, and 
+compare it to our approximation. The following table gives the results of
+ several diagonal $(p,q)$-Pad\'e approximations, for different values of
+$p=q$.
 \begin{table}[ht]
   \begin{center}
     \caption{Error of Pad\'e Approximation}
     \label{CFK:tab:PadeError}
     \begin{tabular}{|c|c|}
       \hline
-      \textbf{Number of Terms} & \textbf{Error}\\
+      \textbf{Value of $p=q$} & \textbf{Error}\\
       \hline
       2 & 1.30e-10 \\
       3 & 5.25e-13 \\
@@ -237,9 +238,42 @@ depending on the number of terms used in the series.
   \end{center}
 \end{table}
 
-Since a (22)-Pad\'e approximation yields a considerably accurate matrix 
+Since a $(2,2)$-Pad\'e approximation yields a considerably accurate matrix 
 exponential and also gives the benefit of taking advantage of the 
 tridiagonal structure, we choose to implement this method.
+
+The implementation of HOMME-NH means that $\frac{\partial\mu}{\partial\phi}$
+ is tridiagonal.  Forming the exponential via Pad\'e approximation then 
+requires inverting a matrix of the following form:
+\[\begin{bmatrix} 0 & \CFKg\Delta t\frac{\partial\mu}{\partial\phi} \\
+    \CFKg\Delta t I & 0 \end{bmatrix} =
+ \begin{bmatrix} \sigma I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
+ -\CFKg\Delta t I          & \sigma I \end{bmatrix}.\]
+Consider the following linear equation:
+\[\begin{bmatrix} \sigma I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
+           -\CFKg\Delta t I & \sigma I \end{bmatrix}
+\begin{bmatrix} Z_1 \\
+ Z_2 \end{bmatrix} = 
+\begin{bmatrix} P_1 \\
+ P_2 \end{bmatrix}.\]
+If $\sigma = 0$ this decomposes to a tridiagonal linear solve and a trivial solve. 
+If $\sigma \neq 0$, then we left multiply by $\begin{bmatrix} I & 0 \\
+                                     \CFKg\Delta t \sigma^{-1}I & I \end{bmatrix}$ to obtain:
+\[\begin{bmatrix} 
+ \sigma I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
+         0 & \sigma I -\left(\CFKg\Delta t\right)^2  \sigma^{-1}\frac{\partial\mu}{\partial\phi}
+ \end{bmatrix}
+ \begin{bmatrix} Z_1 \\
+ Z_2 \end{bmatrix} = 
+\begin{bmatrix} P_1 \\
+ \CFKg\Delta t \sigma^{-1} P_1 +  P_2 \end{bmatrix}.\]
+The matrix $\sigma I -\left(\CFKg\Delta t\right)^2\sigma^{-1}\frac{\partial\mu}{\partial\phi}$ 
+is tridiagonal since $\frac{\partial\mu}{\partial\phi}$ is tridiagonal. 
+Therefore we can solve for $X_2$ with a tridiagonal solve of 
+\[\left[\sigma I -\left(\CFKg\Delta t \right)^2  \sigma^{-1}\frac{\partial\mu}{\partial\phi}\right]Z_2
+ = \CFKg\Delta t\sigma^{-1} P_1 +  P_2\]
+and then form $Z_1$ as 
+\[Z_1 = \sigma^{-1}\left[P_1 + \CFKg\Delta t\frac{\partial \mu}{\partial \phi}\right] Z_2.\]
 
 \section{Implementation}\label{CFK:sec:implementation}
 We consider several explicit Runge-Kutta methods to solve equation 
