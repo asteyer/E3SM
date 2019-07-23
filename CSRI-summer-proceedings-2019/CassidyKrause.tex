@@ -113,12 +113,12 @@ where $w, u,\phi, \theta,$ and $\frac{\partial \pi}{\partial \eta}$ are the
       \hline
       \textbf{Variable Name} & \textbf{Description} \\
       \hline
-      $w$ & Vertical velocity \\
-      $u$ & \\
-      $\phi$ & Geopotential \\
-      $\theta$ & Potential temperature \\
-      $\frac{\partial\pi}{\partial\eta}$ & \\
-      \hline 
+      $w$                                & Vertical velocity      \\
+      $u$                                & Horizontal velocity    \\
+      $\phi$                             & Geopotential           \\
+      $\theta$                           & Potential temperature  \\
+      $\frac{\partial\pi}{\partial\eta}$ &                        \\
+      \hline
     \end{tabular}
   \end{center}
 \end{table}
@@ -164,7 +164,9 @@ The error for this approximation is given by
 
 If the matrix $A$ has eigenvalues that are spread far apart, this 
 approximation can be rather inaccuarate. To mitigate this problem, we 
-implement a scaling and squaring approach. Because of the properties of 
+implement a scaling and squaring approach. For further detail and error
+analysis of the scaling and squaring method, see \cite{CFK:higham2005}
+and \cite{CFK:Al-Mohy2009}. Because of the properties of 
 matrix exponentials, we can write
 \[e^{A} = \left(e^{A/k}\right)^k,\]
 where $k$ is chosen to be the smallest power of $2$ so that 
@@ -276,17 +278,32 @@ and then form $Z_1$ as
 \[Z_1 = \sigma^{-1}\left[P_1 + \CFKg\Delta t\frac{\partial \mu}{\partial \phi}\right] Z_2.\]
 
 \section{Implementation}\label{CFK:sec:implementation}
-We consider several explicit Runge-Kutta methods to solve equation 
-\ref{CFK:eqn:vode}. We consider several Runge-Kutta methods given by the 
-following Butcher tableaux:
-\[
+We consider integrating factor Runge-Kutta methods, which were started in
+\cite{CFK:Lawson1969}, shown to be a type of exponential method RK method by
+\cite{CFK:Minchev2006}, and SSP by \cite{CFK:Isherwood2018}.
+
+We consider several explicit $r-$stage Runge-Kutta methods to solve equation
+\ref{CFK:eqn:vode}. If the Butcher tableau is given by $\begin{array}{c|c}
+c & A \\ \hline & b^T \end{array}$, then the solution to \ref{CFK:eqn:vode} with
+initial condition $v(t_0) = v_0$ and step-size $\Delta t$ is given by
+\[ \left\{\begin{array}{l} v_{m+1} = v_m + \Delta t\sum_{k=1}^r b_k 
+                         e^{-L_m(t_{m,k}-t_m)}N(e^{L_m(t_{m,k}-t_m)}g_k) \\
+          g_j = v_m + \Delta t \sum_{k=1}^r A_{j,k} e^{-L_m(t_{m,k} - t_m)} 
+                      N(e^{L_m(t_{m,k}-t_m)}g_k), \end{array} \right. \]
+for $j = 1,\dots,r$, where $t_{m,k} = t_m + c_k \Delta t$.
+We consider several Runge-Kutta methods given by the
+following Butcher tableaux. The naming convention we use is given by ``$ERK
+-nm$,'' where $n$ is the order of the method, and $m$ is the number of
+stages. The methods we consider are
+\[ ERK-13: \qquad
  \begin{array}{c|ccc}
 0   & 0   & 0 & 0\\
 1/2 & 1/2 & 0 & 0\\
 1   & 0   & 1 & 0\\
 \hline
     & 0   & 1 & 0
-\end{array}\qquad
+\end{array}\]
+\[ ERK-24: \qquad
 \begin{array}{c|cccc}
 0   & 0   & 0   & 0 & 0\\
 1/2 & 1/2 & 0   & 0 & 0\\
@@ -294,7 +311,8 @@ following Butcher tableaux:
 1   & 0   & 0   & 1 & 0\\
 \hline
     & 0   & 0   & 1 & 0
-\end{array}\qquad
+\end{array}\]
+\[ ERK-36: \qquad
 \begin{array}{c|cccccc}
 0   & 0   & 0   & 0   & 0   & 0   & 0\\
 1/5 & 1/5 & 0   & 0   & 0   & 0   & 0\\
@@ -304,11 +322,23 @@ following Butcher tableaux:
 1   & 1/4 & 0   & 0   & 0   & 3/4 & 0\\
 \hline
     & 1/4 & 0   & 0   & 0   & 3/4 & 0
-\end{array}
+\end{array}\]
+\[ ERK - 44: \qquad
+\begin{array}{c|cccc}
+0   & 0   & 0   & 0   & 0 \\
+1/2 & 1/2 & 0   & 0   & 0 \\
+1/2 & 0   & 1/2 & 0   & 0 \\
+1   & 0   & 0   & 1   & 0 \\
+\hline
+    & 1/6 & 1/3 & 1/3 & 1/6
+\end{array} 
 \]
 
 \section{Results}\label{CFK:sec:results}
-Convergence test:
+The convergence test was done for each of the methods described in section
+ \ref{CFK:sec:implementation}. For the ``truth'', we compare our 
+exponential integrating factor methods to a third order, five stage 
+Ullrich method with a timestep of $10^{-5}$. The results are as follows:
 \begin{figure}[hbh]
 \label{CFK:fig:convtest}
 \begin{center}
@@ -338,7 +368,7 @@ Convergence test:
 \scalebox{0.2}{\includegraphics{plots/CFKphi_err_rel.png}}
 \end{tabular}
 \end{center}
-\caption{Errors with exponential integrating factor methods.}
+\caption{Errors with exponential integrating factor methods, continued.}
 \end{figure}
 
 \section{Conclusions}
