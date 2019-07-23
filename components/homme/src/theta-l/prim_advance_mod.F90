@@ -2955,8 +2955,8 @@ contains
   real (kind=real_kind) normJ, pfac, fac, alpha
   integer i,j,p,q,info, maxiter, k, dimJac 
 
-  p = 3  ! parameter used in diagonal Pade approximation
-  q = 4
+  p = 2  ! parameter used in diagonal Pade approximation
+  q = 2
   pfac = 1.d0/gamma(dble(p+q+1.d0))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
@@ -3023,29 +3023,16 @@ contains
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-!  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac)  ! using full LU factorization
-!  print *, "----------test------------------"
-!  print *, " diff in methods ", norm2(DinvN- expJ)
-!  print *, "-------------------------------"
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
+!  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac)  ! using full LU factorization
 
   ! Squaring
   do i=1,k
     expJ = matmul(expJ, expJ)
-!    DinvN = matmul(DinvN, DinvN)
   end do
-!  do i = 1,dimJac
-!    if (abs(expJ(23,i)) > 10.d-3) then
-!      print *, "expJ(23,",i,") = ", expJ(23,i)
-!    end if
-!  end do
   if (present(w)) then
     w = matmul(expJ, w)
   end if
-!  print *, "___________________________________"
-!  print *, "w ", w
-!  print *, "expJ ", expJ
-!  print *, "expProduct ", w
 
   end subroutine matrix_exponential
 !===============================================================================
@@ -3120,8 +3107,6 @@ contains
 
     X2 = B
     X1 = sig1Inv * (kfac*N1 + alpha*matmul(Tri,X2))
-!    print *, "----------test4-----------"
-!    print *, -alpha*X1 + sig1*X2 - kfac*N2
 ! Now do the second tridiag solve
     N1 = X1
     N2 = X2
@@ -3147,12 +3132,8 @@ contains
     X2 = B
 
     X1 = sig2Inv * (N1 + alpha*matmul(Tri,X2))
-!    print *, "------------test5-----------"
-!    print *, -alpha*X1 + sig2*X2 - N2
     DinvN(1:block_dim, :) = real(X1)
     DinvN(block_dim+1:dimJac, :) = real(X2)
-
-
   end if
 
   end subroutine get_DinvN
