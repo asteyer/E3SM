@@ -339,6 +339,177 @@ The convergence test was done for each of the methods described in section
  \ref{CFK:sec:implementation}. For the ``truth'', we compare our 
 exponential integrating factor methods to a third order, five stage 
 Ullrich method with a timestep of $10^{-5}$. The results are as follows:
+\begin{table}
+  \centering
+  \caption{Absolute error of state variables}
+  \label{CFK:tab:abs_err}
+  \subtable[Absolute error of $u$]{\begin{tabular}{c|c|c}
+      \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
+      \hline
+      ERK-13          & $0.1$             & $3.11$e-$-4$ \\
+      ERK-13          & $0.01$            & $3.12$e-$-6$ \\
+      ERK-13          & $0.001$           & $1.07$e-$-6$ \\
+      \hline
+      ERK-24          & $0.1$             & $2.84$e-$-4$ \\
+      ERK-24          & $0.01$            & $2.83$e-$-6$ \\
+      ERK-24          & $0.001$           & $1.07$e-$-6$ \\
+      \hline
+      ERK-36          & $0.1$             & $1.07$e-$-6$ \\
+      ERK-36          & $0.01$            & $1.07$e-$-6$ \\
+      ERK-36          & $0.001$           & $1.07$e-$-6$ \\
+      \hline
+      ERK-44          & $0.1$             & $1.07$e-$-6$ \\
+      ERK-44          & $0.01$            & $1.07$e-$-6$ \\
+      ERK-44          & $0.001$           & $1.07$e-$-6$
+    \end{tabular}}
+  \qquad
+  \subtable[Absolute error of $v$]{\begin{tabular}{c|c|c}
+      \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
+      \hline
+      ERK-13          & $0.1$             & $3.22$e-$-4$ \\
+      ERK-13          & $0.01$            & $3.22$e-$-6$ \\
+      ERK-13          & $0.001$           & $6.52$e-$-7$ \\
+      \hline
+      ERK-24          & $0.1$             & $2.93$e-$-4$ \\
+      ERK-24          & $0.01$            & $2.93$e-$-6$ \\
+      ERK-24          & $0.001$           & $6.52$e-$-7$ \\
+      \hline
+      ERK-36          & $0.1$             & $6.55$e-$-7$ \\
+      ERK-36          & $0.01$            & $6.52$e-$-7$ \\
+      ERK-36          & $0.001$           & $6.52$e-$-7$ \\
+      \hline
+      ERK-44          & $0.1$             & $6.53$e-$-7$ \\
+      ERK-44          & $0.01$            & $6.52$e-$-7$ \\
+      ERK-44          & $0.001$           & $6.52$e-$-7$
+    \end{tabular}}\\
+
+  \subtable[Absolute error of $w$]{\begin{tabular}{c|c|c}
+      \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
+      \hline
+      ERK-13          & $0.1$             & $1.02$e-$-1$ \\
+      ERK-13          & $0.01$            & $1.02$e-$-3$ \\
+      ERK-13          & $0.001$           & $1.11$e-$-5$ \\
+      \hline
+      ERK-24          & $0.1$             & $1.02$e-$-1$ \\
+      ERK-24          & $0.01$            & $1.02$e-$-3$ \\
+      ERK-24          & $0.001$           & $1.11$e-$-5$ \\
+      \hline
+      ERK-36          & $0.1$             & $7.54$e-$-4$ \\
+      ERK-36          & $0.01$            & $2.00$e-$-6$ \\
+      ERK-36          & $0.001$           & $1.49$e-$-6$ \\
+      \hline
+      ERK-44          & $0.1$             & $2.30$e-$-4$ \\
+      ERK-44          & $0.01$            & $1.49$e-$-6$ \\
+      ERK-44          & $0.001$           & $1.49$e-$-6$
+    \end{tabular}}\qquad
+  \subtable[Absolute error of $\phi$]{\begin{tabular}{c|c|c}
+      \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
+      \hline
+      ERK-13          & $0.1$             & $1.81$e-$-1$ \\
+      ERK-13          & $0.01$            & $1.81$e-$-3$ \\
+      ERK-13          & $0.001$           & $1.16$e-$-4$ \\
+      \hline
+      ERK-24          & $0.1$             & $1.81$e-$-1$ \\
+      ERK-24          & $0.01$            & $1.81$e-$-3$ \\
+      ERK-24          & $0.001$           & $1.16$e-$-4$ \\
+      \hline
+      ERK-36          & $0.1$             & $3.70$e-$-3$ \\
+      ERK-36          & $0.01$            & $1.15$e-$-4$ \\
+      ERK-36          & $0.001$           & $1.15$e-$-4$ \\
+      \hline
+      ERK-44          & $0.1$             & $4.19$e-$-4$ \\
+      ERK-44          & $0.01$            & $1.15$e-$-4$ \\
+      ERK-44          & $0.001$           & $1.15$e-$-4$
+    \end{tabular}}
+\end{table}
+
+\begin{table}
+  \centering
+  \caption{Relative error of state variables}
+  \label{CFK:tab:rel_err}
+  \subtable[Relative error of $u$]{\begin{tabular}{c|c|c}
+      \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
+      \hline
+      ERK-13          & $0.1$             & $3.48$e-$-6$ \\
+      ERK-13          & $0.01$            & $6.31$e-$-8$ \\
+      ERK-13          & $0.001$           & $6.31$e-$-8$ \\
+      \hline
+      ERK-24          & $0.1$             & $3.17$e-$-6$ \\
+      ERK-24          & $0.01$            & $6.31$e-$-8$ \\
+      ERK-24          & $0.001$           & $6.31$e-$-8$ \\
+      \hline
+      ERK-36          & $0.1$             & $6.31$e-$-8$ \\
+      ERK-36          & $0.01$            & $6.31$e-$-8$ \\
+      ERK-36          & $0.001$           & $6.31$e-$-8$ \\
+      \hline
+      ERK-44          & $0.1$             & $6.31$e-$-8$ \\
+      ERK-44          & $0.01$            & $6.31$e-$-8$ \\
+      ERK-44          & $0.001$           & $6.31$e-$-8$
+    \end{tabular}}
+  \qquad
+  \subtable[Relative error of $v$]{\begin{tabular}{c|c|c}
+      \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
+      \hline
+      ERK-13          & $0.1$             & $1.79$e-$+1$ \\
+      ERK-13          & $0.01$            & $8.88$e-$-1$ \\
+      ERK-13          & $0.001$           & $8.88$e-$-1$ \\
+      \hline
+      ERK-24          & $0.1$             & $1.68$e-$+1$ \\
+      ERK-24          & $0.01$            & $8.95$e-$-1$ \\
+      ERK-24          & $0.001$           & $8.88$e-$-1$ \\
+      \hline
+      ERK-36          & $0.1$             & $8.88$e-$-1$ \\
+      ERK-36          & $0.01$            & $8.88$e-$-1$ \\
+      ERK-36          & $0.001$           & $8.88$e-$-1$ \\
+      \hline
+      ERK-44          & $0.1$             & $8.88$e-$-1$ \\
+      ERK-44          & $0.01$            & $8.88$e-$-1$ \\
+      ERK-44          & $0.001$           & $8.88$e-$-1$
+    \end{tabular}}\\
+
+  \subtable[Relative error of $w$]{\begin{tabular}{c|c|c}
+      \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
+      \hline
+      ERK-13          & $0.1$             & $1.41$e-$+8$ \\
+      ERK-13          & $0.01$            & $1.41$e-$+6$ \\
+      ERK-13          & $0.001$           & $1.41$e-$+4$ \\
+      \hline
+      ERK-24          & $0.1$             & $1.41$e-$+8$ \\
+      ERK-24          & $0.01$            & $1.41$e-$+6$ \\
+      ERK-24          & $0.001$           & $1.41$e-$+4$ \\
+      \hline
+      ERK-36          & $0.1$             & $1.04$e-$+6$ \\
+      ERK-36          & $0.01$            & $1.09$e-$+3$ \\
+      ERK-36          & $0.001$           & $5.27$e-$+1$ \\
+      \hline
+      ERK-44          & $0.1$             & $3.18$e-$+5$ \\
+      ERK-44          & $0.01$            & $8.82$e-$+1$ \\
+      ERK-44          & $0.001$           & $5.18$e-$+1$
+    \end{tabular}}\qquad
+  \subtable[Relative error of $\phi$]{\begin{tabular}{c|c|c}
+      \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
+      \hline
+      ERK-13          & $0.1$             & $7.15$e-$-7$ \\
+      ERK-13          & $0.01$            & $7.17$e-$-9$ \\
+      ERK-13          & $0.001$           & $4.60$e-$-10$ \\
+      \hline
+      ERK-24          & $0.1$             & $7.15$e-$-7$ \\
+      ERK-24          & $0.01$            & $7.17$e-$-9$ \\
+      ERK-24          & $0.001$           & $4.60$e-$-10$ \\
+      \hline
+      ERK-36          & $0.1$             & $1.47$e-$-8$ \\
+      ERK-36          & $0.01$            & $4.53$e-$-10$ \\
+      ERK-36          & $0.001$           & $4.53$e-$-10$ \\
+      \hline
+      ERK-44          & $0.1$             & $1.66$e-$-9$ \\
+      ERK-44          & $0.01$            & $4.53$e-$-10$ \\
+      ERK-44          & $0.001$           & $4.53$e-$-10$
+    \end{tabular}}
+\end{table}
+
+
+
+
 \begin{figure}[hbh]
 \label{CFK:fig:convtest}
 \begin{center}
