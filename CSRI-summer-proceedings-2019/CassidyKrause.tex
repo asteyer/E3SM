@@ -18,7 +18,7 @@
 % This controls the table-of-contents entry in the proceedings. Edit it
 % to include your article title followed by the authors' names, as shown.
 \addcontentsline{toc}{chapter}{Exponential Integrators for the HOMME-NH
-Non-Hydrostatic Atmosphere Model\\
+Nonhydrostatic Atmosphere Model\\
 {\em C.F.\ Krause and A.J.\ Steyer}}
 
 \pagestyle{myheadings}
@@ -28,10 +28,10 @@ Non-Hydrostatic Atmosphere Model\\
 % This gives the running head. Usually you list a shortened version of
 % your article title (unless it's already very short) along with
 % the author's names, as shown.
-\markboth{Exponential Integrators for E3SM}{C.F.\ Krause and A.J.\ Steyer}
+\markboth{Exponential Integrators for HOMME-NH}{C.F.\ Krause and A.J.\ Steyer}
 
 % Put your article title in here
-\title{Exponential Integrators for the HOMME-NH Non-Hydrostatic Atmosphere
+\title{Exponential Integrators for the HOMME-NH Nonhydrostatic Atmosphere
  Model}
 
 % List each author, their affiliation, and their e-mail address, as shown.
@@ -89,16 +89,60 @@ allows us to form these matrix exponentials efficiently and in parallel,
 making this a viable alternative to the IMEX Runge-Kutta methods.
 
 The rest of the paper is structured as follows: In section 
-\ref{CFK:sec:homme}, we give a brief background of the non-hydrostatic 
+\ref{CFK:sec:homme}, we give a brief background of the nonhydrostatic 
 model; section \ref{CFK:sec:matexp} discusses exponential integrator 
 methods; the implementation of these methods is given in section 
-\ref{CFK:sec:implementation}; and numerical results are given in section 
+\ref{CFK:sec:ifrk}; and numerical results are given in section 
 \ref{CFK:sec:results}.
 
-\section{HOMME-NH}\label{CFK:sec:homme}
-In the HOMME-NH model, we employ a horizontally explicit, vertically 
-implicit (HEVI) partitioning. Choosing to linearize around the stiffly 
-treated terms, we can write the governing equations as
+\section{Exponential Methods}\label{CFK:sec:matexp} 
+The most expensive part of any exponential method is forming the matrix 
+exponential $e^A$. For this reason, matrix exponential methods were not 
+widely used for many years, but advances in efficiently forming $e^A$ have 
+recently made exponential methods competetive choices for numerical solvers.
+
+The matrix exponential $e^A$ can be analytically computed if the matrix $A$
+ is diagonalizable, but finding the eigenvalues of $A$ is expensive, and it
+ is not generally guaranteed that $A$ is diagonalizable. A more general 
+approach is to approximate $e^{A}$ using a Pad\'e or Taylor series 
+approximation. Other methods of approximating the matrix exponential are 
+discussed in \cite{CFK:Moler2003}.
+
+We choose to implement a $(p,q)$-Pad\'e approximation 
+$e^{A}\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, where $P_{pq}(A)$ and 
+$Q_{pq}(A)$ are defined as follows:
+
+\begin{align*}
+P_{pq}(A) &= \sum_{j=0}^p\frac{(p+q-j)!p!}{(p+q)!j!(p-j)!}A^j\\
+Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j
+\end{align*}
+
+The error for this approximation is given by
+\[ e^A - \left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(A^{p+q+1}).\]
+
+If the matrix $A$ has eigenvalues that are spread far apart, this 
+approximation can be rather inaccuarate. To mitigate this problem, we 
+implement a scaling and squaring approach. We briefly outline this 
+procedure here; for further detail and error analysis of the scaling and 
+squaring method, see \cite{CFK:higham2005} and \cite{CFK:Al-Mohy2009}. 
+
+Because of the properties of matrix exponentials, we can write
+\[e^{A} = \left(e^{A/k}\right)^k,\]
+where $k$ is chosen to be the smallest power of $2$ so that 
+$\|A/k\| \leq 0.5$. With this factorization, the matrix $A$ is scaled down
+ to $A/k$, and the matrix exponential $e^{A/k}$ is calculated using the 
+formulas above. This matrix exponential is then squared repeatedly to 
+recover the desired matrix exponential $e^{A}$.
+
+Once the terms $P_{pq}$ and $Q_{pq}$ are calculated, the product 
+$e^A\approx\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ is a potentially 
+expensive computation because of the matrix inversion. Fortunately, for our
+ application, the matrix $A$ we consider has a special structure.
+
+\section{Implementation with HOMME-NH}\label{CFK:sec:homme}
+HOMME-NH is a nonhydrostatic atmosphere model whose state variables are
+listed in Table \ref{CFK:tab:variables}. The stiff terms in this model are 
+$w$ and $\phi$, so we can write the governing equations as
 \[q_t \coloneqq \begin{bmatrix} u_t \\
 w_t\\
 \phi_t\\
@@ -109,11 +153,9 @@ w_t\\
 -\CFKg (1-\mu)\\
 \CFKg w\\
 0\\
-0\end{bmatrix},\] 
-where $w, u,\phi, \theta,$ and $\frac{\partial \pi}{\partial \eta}$ are the
- state variables in the HOMME-NH model, as listed in table \ref{CFK:tab:variables}.
+0\end{bmatrix}.\] 
 
-\begin{table}
+\begin{table}[ht]
   \caption{Variables in HOMME-NH}
   \label{CFK:tab:variables}
   \begin{center}
@@ -133,68 +175,26 @@ where $w, u,\phi, \theta,$ and $\frac{\partial \pi}{\partial \eta}$ are the
 
 Linearizing $s(q)$ gives the following Jacobian:
 \[ J = \begin{bmatrix}
- &                  &                                                   &  & \\
+0&                  &                                                   &  & \\
  & 0                & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} &  & \\
  & \CFKg \Delta t I & 0                                                 &  & \\
- &                  &                                                   &  & \\
- &                  &                                                   &  & \end{bmatrix}.\]
+ &                  &                                                   &0 & \\
+ &                  &                                                   &  &0\end{bmatrix}.\]
 
 So, forming $e^{\alpha J}$ reduces to forming an exponential of 
-\[ \begin{bmatrix}
+\[A \coloneqq \begin{bmatrix}
    0              & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} \\
  \CFKg \Delta t I & 0  \end{bmatrix},\]
-where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. The most 
-computationally expensive part of exponential-type methods is forming the 
-matrix exponential; as discussed in the next section, we are able to 
-leverage the structure of this particular Jacobian in order to develop 
-methods that are competitive with the currently implemented IMEX Runge-
-Kutta methods.
-
-\subsection{The Matrix Exponential}\label{CFK:sec:matexp} 
-One can form the matrix exponential analytically if the matrix $A$ is 
-diagonalizable, but finding the eigenvalues of $A$ is expensive, and it is
- not generally guaranteed that $A$ is diagonalizable. A more general 
-approach is to approximate $e^{A}$ using a Pad\'e or Taylor series 
-approximation. Other methods of approximating the matrix exponential are 
-discussed in \cite{CFK:Moler2003}.
-
-We choose to implement a $(p,q)$-Pad\'e approximation 
-$e^{A}\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, where $P_{pq}(A)$ and 
-$Q_{pq}(A)$ are defined as follows:
-
-\begin{align*}
-P_{pq}(A) &= \sum_{j=1}^p\frac{(p+q-j)!p!}{(p+q)!j!(p-j)!}A^j\\
-Q_{pq}(A) &= \sum_{j=1}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j
-\end{align*}
-
-The error for this approximation is given by
-\[ e^A - \left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(A^{p+q+1}).\]
-
-If the matrix $A$ has eigenvalues that are spread far apart, this 
-approximation can be rather inaccuarate. To mitigate this problem, we 
-implement a scaling and squaring approach. For further detail and error
-analysis of the scaling and squaring method, see \cite{CFK:higham2005}
-and \cite{CFK:Al-Mohy2009}. Because of the properties of 
-matrix exponentials, we can write
-\[e^{A} = \left(e^{A/k}\right)^k,\]
-where $k$ is chosen to be the smallest power of $2$ so that 
-$\|A/k\| \leq 0.5$. With this factorization, the matrix $A$ is scaled down
- to $A/k$, and the matrix exponential $e^{A/k}$ is calculated using the 
-formulas above. This matrix exponential is then squared repeatedly to 
-recover the desired matrix exponential $e^{A}$.
-
-Once the terms $P_{pq}$ and $Q_{pq}$ are calculated, the product 
-$\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ is a potentially expensive 
-computation. Fortunately, for our problem, the matrix $A$ we consider has a
- special structure. It is of the form 
-\[A= \begin{bmatrix} 0 & \alpha T\\
-  \alpha I & 0 \end{bmatrix},\]
-where $T$ is tridiagonal. This form allows us to solve 
-$\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ using tridiagonal solves and back 
-substitution.
+where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. This form 
+allows us to solve $\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ using 
+tridiagonal solves and back substitution.
 
 To do so, we first factor $Q_{pq}(A)$ as
-\[ Q_{pq}(A) = \prod_{j=1}^q\left[\sigma_jI-A\right]\text{, where }\sigma_j\in \mathbb{C}\text{ for }j=1,\dots,q.\]
+\begin{align*}
+Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j\\
+          &= \prod_{j=1}^q\left[\sigma_jI-A\right],
+\end{align*}
+where $\sigma_j\in \mathbb{C}$ for $j=1,\dots,q$.
 
 Then, since we want to solve for 
 $R \coloneqq \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, we have
@@ -205,9 +205,10 @@ Q_{pq}(A) R &= P_{pq}(A)\\
 
 Define $R_1 \coloneqq \left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R$.
 Then our equation becomes
-\[ \left[\sigma_1I-A\right]R_1 = P_{pq}(A).\] Since $\left[\sigma_1I-A\right]$ 
-is a tridiagonal matrix, we can solve for $R_1$ using far fewer operations
- than if $\left[\sigma_1I-A\right]$ were a full matrix.
+\[ \left[\sigma_1I-A\right]R_1 = P_{pq}(A).\] Since 
+$\left[\sigma_1I-A\right]$ has some tridiagonal structure, we can solve for
+ $R_1$ using far fewer operations than if $\left[\sigma_1I-A\right]$ were a
+ full matrix.
 
 Now we have
 \[\left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R = R_1.\] 
@@ -285,7 +286,7 @@ Therefore we can solve for $X_2$ with a tridiagonal solve of
 and then form $Z_1$ as 
 \[Z_1 = \sigma^{-1}\left[P_1 + \CFKg\Delta t\frac{\partial \mu}{\partial \phi}\right] Z_2.\]
 
-\section{Integrating Factor RK Methods}\label{CFK:sec:implementation}
+\section{Integrating Factor RK Methods}\label{CFK:sec:ifrk}
 We consider integrating factor Runge-Kutta methods, which were started in 
 \cite{CFK:Lawson1969}, shown to be a type of exponential method RK method by
 \cite{CFK:Minchev2006}, and SSP by \cite{CFK:Isherwood2018}.
@@ -344,7 +345,7 @@ stages. The methods we consider are
 
 \section{Results}\label{CFK:sec:results}
 The convergence test was done for each of the methods described in section
- \ref{CFK:sec:implementation}. For the ``truth'', we compare our 
+ \ref{CFK:sec:ifrk}. For the ``truth'', we compare our 
 exponential integrating factor methods to a third order, five stage 
 Ullrich method with a timestep of $10^{-5}$. The results are as follows:
 \begin{table}
