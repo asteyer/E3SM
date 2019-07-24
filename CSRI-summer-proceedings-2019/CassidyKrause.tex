@@ -17,8 +17,8 @@
 
 % This controls the table-of-contents entry in the proceedings. Edit it
 % to include your article title followed by the authors' names, as shown.
-\addcontentsline{toc}{chapter}{Exponential Integrators for the Energy 
-Exascale Earth System Model\\
+\addcontentsline{toc}{chapter}{Exponential Integrators for the HOMME-NH
+Non-Hydrostatic Atmosphere Model\\
 {\em C.F.\ Krause and A.J.\ Steyer}}
 
 \pagestyle{myheadings}
@@ -31,7 +31,8 @@ Exascale Earth System Model\\
 \markboth{Exponential Integrators for E3SM}{C.F.\ Krause and A.J.\ Steyer}
 
 % Put your article title in here
-\title{Exponential Integrators for the Energy Exascale Earth System Model}
+\title{Exponential Integrators for the HOMME-NH Non-Hydrostatic Atmosphere
+ Model}
 
 % List each author, their affiliation, and their e-mail address, as shown.
 \author{Cassidy F.\ Krause\thanks{University of Kansas, ckrause@ku.edu}
@@ -42,43 +43,50 @@ Exascale Earth System Model\\
 
 % Include your abstract here.
 \begin{abstract}
-The HOMME-NH nonhydrostatic atmosphere model has a system of stiff ODEs 
-which are currently solved using implicit-explicit (IMEX) Runge-Kutta (RK) 
-methods. We introduce a horizontally explicit - vertically integrating 
-factor exponential method (HEVI-Exponential) as an alternative to solving 
+Time-stepping in the HOMME-NH nonhydrostatic atmosphere model requires 
+integration of a stiff initial value problem. The current standard is to
+ solve these equations using implicit-explicit (IMEX) Runge-Kutta (RK) 
+methods with a horizontally explicit - vertically implicit (HEVI) 
+partitioning. We introduce a horizontally explicit - vertically integrating
+ factor exponential method (HEVI-Exponential) as an alternative to solving 
 these stiff equations. The main drawback to exponential methods is the cost
-of forming the matrix exponential. Here, we show that we can mitigate this 
+ of forming the matrix exponential. Here, we show that we can mitigate this 
 cost by taking advantage of the tridiagonal-like form of our Jacobian and 
 parallelizing our computations, making this solver an attractive option for
 HOMME-NH.
 \end{abstract}
 
 \section{Introduction} \label{CFK:sec:intro}
-Stiff ODEs are notorious for requiring a very small step size when solved 
-explicitly. Because this restriction can make algorithms quite inefficient,
- two different methods have been developed for dealing with these problems. 
+Stiff initial value problems, like the ones found in HOMME-NH, require a 
+very small step size when solved explicitly. On the other hand, using a 
+fully implicit method is computationally inefficient. To deal with these 
+restrictions, two different approaches have been developed for solving 
+stiff equations.
 
-Suppose we have an ODE given by \[ f(u) = s(u) + n(u),\] where $s(u)$ 
+Consider an equation of the form \[ u_t = f(u) = s(u) + n(u),\] where $s(u)$ 
 contains the stiff part of the equation, and $n(u)$ contains the nonstiff 
-part. One way to deal with this problem is to use an implicit Runge-Kutta
-method on the stiff part, and an explicit Runge-Kutta on the nonstiff part. 
-This is the current method used in the HOMME-NH nonhydrostatic atmosphere 
-model of the E3SM, and it performs quite well.
+part. The current implementation in HOMME-NH uses an implicit Runge-Kutta
+method on $s(u)$, and an explicit Runge-Kutta method to solve $n(u)$. This 
+approach is efficient and accurate, but with recent advances in 
+exponential-type integrators, it is worth examining their performance as 
+well.
 
-Another approach is to use an exponential-type integrator, such as 
-integrating factor Runge-Kutta methods (IFRKs). In this case, we split our
- method as \[ f(u) = Lu + N(u),\] where $L$ is a linear operator containing
- the stiff part of the ODE, and $N(u) = f(u) - Lu$ contains the nonstiff 
-terms. Often, $L = f'(u)$, but we do not assume this is the case. 
-
-Using the change of variables $v(t) = e^{-L(t-t_m)}u(t)$, we have
+In this paper, we consider integrating factor Runge-Kutta methods (IFRKs). 
+In this case, we split our method as \[ u_t = f(u_m) = L_mu_m + N(u_m),\] 
+where $L_m$ is a linear operator containing the stiff part of the equation, 
+and $N(u_m) = f(u_m)-L_mu_m$ contains the nonstiff terms. Often, 
+$L_m = f'(u_m)$, but we do not assume this is the case. Using the change of
+ variables $v(t) = e^{-L_m(t-t_m)}u(t)$, we have
 \begin{equation}\label{CFK:eqn:vode}
-v_t = e^{-L(t-t_m)}N(e^{L(t-t_m)}v).
+v_t = e^{-L_m(t-t_m)}N(e^{L_m(t-t_m)}v).
 \end{equation} 
-We can then apply an $r-$stage Runge-Kutta method to solve 
-\ref{CFK:eqn:vode}, as discussed in section \ref{CFK:sec:implementation}. 
-In this paper, we implement these exponential-type methods in the HOMME-NH
- model as a feasible alternative to the IMEX Runge-Kutta methods.
+We can now use a fully explicit $r-$stage Runge Kutta method to solve 
+\ref{CFK:eqn:vode}.
+
+The most expensive part of these IFRK methods is the formation of the 
+matrix exponential. However, the structure of the Jacobian in HOMME-NH 
+allows us to form these matrix exponentials efficiently and in parallel, 
+making this a viable alternative to the IMEX Runge-Kutta methods.
 
 The rest of the paper is structured as follows: In section 
 \ref{CFK:sec:homme}, we give a brief background of the non-hydrostatic 
@@ -277,8 +285,8 @@ Therefore we can solve for $X_2$ with a tridiagonal solve of
 and then form $Z_1$ as 
 \[Z_1 = \sigma^{-1}\left[P_1 + \CFKg\Delta t\frac{\partial \mu}{\partial \phi}\right] Z_2.\]
 
-\section{Implementation}\label{CFK:sec:implementation}
-We consider integrating factor Runge-Kutta methods, which were started in
+\section{Integrating Factor RK Methods}\label{CFK:sec:implementation}
+We consider integrating factor Runge-Kutta methods, which were started in 
 \cite{CFK:Lawson1969}, shown to be a type of exponential method RK method by
 \cite{CFK:Minchev2006}, and SSP by \cite{CFK:Isherwood2018}.
 
@@ -514,13 +522,13 @@ Ullrich method with a timestep of $10^{-5}$. The results are as follows:
 \label{CFK:fig:convtest}
 \begin{center}
 \begin{tabular}{cc}
-\scalebox{0.2}{\includegraphics{plots/CFKu_err.png}} 
+\scalebox{0.15}{\includegraphics{plots/CFKu_err.png}} 
 &
-\scalebox{0.2}{\includegraphics{plots/CFKu_err_rel.png}}
+\scalebox{0.15}{\includegraphics{plots/CFKu_err_rel.png}}
 \\
-\scalebox{0.2}{\includegraphics{plots/CFKv_err.png}} 
+\scalebox{0.15}{\includegraphics{plots/CFKv_err.png}} 
 &
-\scalebox{0.2}{\includegraphics{plots/CFKv_err_rel.png}}
+\scalebox{0.15}{\includegraphics{plots/CFKv_err_rel.png}}
 \end{tabular}
 \end{center}
 \caption{Errors with exponential integrating factor methods.}
@@ -530,13 +538,13 @@ Ullrich method with a timestep of $10^{-5}$. The results are as follows:
 \label{CFK:fig:convtest1}
 \begin{center}
 \begin{tabular}{cc}
-\scalebox{0.2}{\includegraphics{plots/CFKw_err.png}} 
+\scalebox{0.15}{\includegraphics{plots/CFKw_err.png}} 
 &
-\scalebox{0.2}{\includegraphics{plots/CFKw_err_rel.png}}
+\scalebox{0.15}{\includegraphics{plots/CFKw_err_rel.png}}
 \\
-\scalebox{0.2}{\includegraphics{plots/CFKphi_err.png}} 
+\scalebox{0.15}{\includegraphics{plots/CFKphi_err.png}} 
 &
-\scalebox{0.2}{\includegraphics{plots/CFKphi_err_rel.png}}
+\scalebox{0.15}{\includegraphics{plots/CFKphi_err_rel.png}}
 \end{tabular}
 \end{center}
 \caption{Errors with exponential integrating factor methods, continued.}
