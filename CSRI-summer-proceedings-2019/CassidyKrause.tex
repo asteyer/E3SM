@@ -88,17 +88,18 @@ matrix exponential. However, the structure of the Jacobian in HOMME-NH
 allows us to form these matrix exponentials efficiently and in parallel, 
 making this a viable alternative to the IMEX Runge-Kutta methods.
 
-The rest of the paper is structured as follows: In section 
-\ref{CFK:sec:homme}, we give a brief background of the nonhydrostatic 
-model; section \ref{CFK:sec:matexp} discusses exponential integrator 
-methods; the implementation of these methods is given in section 
-\ref{CFK:sec:ifrk}; and numerical results are given in section 
-\ref{CFK:sec:results}.
+The rest of the paper is structured as follows: In Section 
+\ref{CFK:sec:matexp} we give a brief background of matrix exponentials; 
+Sections \ref{CFK:sec:homme} and \ref{CFK:sec:ifrk} discuss the
+implementation of Integrating Factor Runge-Kutta (IFRK) methods with the
+HOMME-NH nonhydrostatic atmosphere model; and numerical results are given 
+in Section \ref{CFK:sec:results}.
 
 \section{Exponential Methods}\label{CFK:sec:matexp} 
-The most expensive part of any exponential method is forming the matrix 
-exponential $e^A$. For this reason, matrix exponential methods were not 
-widely used for many years, but advances in efficiently forming $e^A$ have 
+While exponential integrators allow for a larger time step than explicit 
+methods, a major drawback is the computational cost of forming the matrix
+exponential. For this reason, matrix exponential methods were not widely 
+used for many years, but advances in efficiently forming $e^A$ have 
 recently made exponential methods competetive choices for numerical solvers.
 
 The matrix exponential $e^A$ can be analytically computed if the matrix $A$
@@ -308,28 +309,19 @@ initial condition $v(t_0) = v_0$ and step-size $\Delta t$ is given by
           g_j = v_m + \Delta t \sum_{k=1}^r A_{j,k} e^{-L_m(t_{m,k} - t_m)} 
                       N(e^{L_m(t_{m,k}-t_m)}g_k), \end{array} \right. \]
 for $j = 1,\dots,r$, where $t_{m,k} = t_m + c_k \Delta t$.
-We consider several Runge-Kutta methods given by the
-following Butcher tableaux. The naming convention we use is given by ``$ERK
+The naming convention we use for the explicit $r$-stage RK methods is ``$ERK
 -nm$,'' where $n$ is the order of the method, and $m$ is the number of
-stages. The methods we consider are
-\[ ERK-13: \qquad
+stages. The four methods we consider are given by the Butcher tableaux 
+below.
+\begin{align*}&\text{ERK-}13:
  \begin{array}{c|ccc}
 0   & 0   & 0 & 0\\
 1/2 & 1/2 & 0 & 0\\
 1   & 0   & 1 & 0\\
 \hline
     & 0   & 1 & 0
-\end{array}\]
-\[ ERK-24: \qquad
-\begin{array}{c|cccc}
-0   & 0   & 0   & 0 & 0\\
-1/2 & 1/2 & 0   & 0 & 0\\
-1/2 & 0   & 1/2 & 0 & 0\\
-1   & 0   & 0   & 1 & 0\\
-\hline
-    & 0   & 0   & 1 & 0
-\end{array}\]
-\[ ERK-36: \qquad
+\end{array}
+& \text{ERK-}36: 
 \begin{array}{c|cccccc}
 0   & 0   & 0   & 0   & 0   & 0   & 0\\
 1/5 & 1/5 & 0   & 0   & 0   & 0   & 0\\
@@ -339,8 +331,18 @@ stages. The methods we consider are
 1   & 1/4 & 0   & 0   & 0   & 3/4 & 0\\
 \hline
     & 1/4 & 0   & 0   & 0   & 3/4 & 0
-\end{array}\]
-\[ ERK - 44: \qquad
+\end{array}\\
+\\
+&\text{ERK-}24: 
+\begin{array}{c|cccc}
+0   & 0   & 0   & 0 & 0\\
+1/2 & 1/2 & 0   & 0 & 0\\
+1/2 & 0   & 1/2 & 0 & 0\\
+1   & 0   & 0   & 1 & 0\\
+\hline
+    & 0   & 0   & 1 & 0
+\end{array}
+& \text{ERK-}44: 
 \begin{array}{c|cccc}
 0   & 0   & 0   & 0   & 0 \\
 1/2 & 1/2 & 0   & 0   & 0 \\
@@ -349,14 +351,18 @@ stages. The methods we consider are
 \hline
     & 1/6 & 1/3 & 1/3 & 1/6
 \end{array} 
-\]
+\end{align*}
 
 \section{Results}\label{CFK:sec:results}
 The convergence test was done for each of the methods described in section
  \ref{CFK:sec:ifrk}. For the ``truth'', we compare our 
 exponential integrating factor methods to a third order, five stage 
-Ullrich method with a timestep of $10^{-5}$. The results are as follows:
-\begin{table}
+Ullrich method with a timestep of $10^{-5}$. We calculate the maximum 
+$2$-norm error over all latitudes and longitudes. The absolute error is
+listed in Table \ref{CFK:tab:abs_err}, and the relative error is listed
+in Table \ref{CFK:tab:rel_err}.
+
+\begin{table}[hb]
   \centering
   \caption{Absolute error of state variables}
   \label{CFK:tab:abs_err}
@@ -440,7 +446,7 @@ Ullrich method with a timestep of $10^{-5}$. The results are as follows:
     \end{tabular}}
 \end{table}
 
-\begin{table}
+\begin{table}[ht]
   \centering
   \caption{Relative error of state variables}
   \label{CFK:tab:rel_err}
@@ -524,10 +530,23 @@ Ullrich method with a timestep of $10^{-5}$. The results are as follows:
     \end{tabular}}
 \end{table}
 
+Note that the value of $\phi$ is small, so even though the absolute error 
+of the HEVI-Exponential methods is very small, the relative error is rather
+ large. Recall from Table \ref{CFK:tab:PadeError} that the error of the 
+$(2,2)$-Pad\`e approximation that we are implementing is $\mathcal{O}(10^{-10})$.
+This doesn't take into account the error from the HEVI-Exponential itself, 
+and combining this with the loss of digits that may happen because of the 
+small values of $\phi$, it is not surprising that the absolute error seems
+to be bounded by $10^{-4}$.
 
+We graph these errors in Figure \ref{CFK:fig:convtest}. One thing to note
+is that for each of these variables, the error should increase in 
+proportion to the time step and the order of the method. That is, an 
+explicit RK method of order $m$ should have a slope of $m$. However, we 
+see that the slope of these methods flattens out as the timestep goes to 
+zero, or as the error is limited by the accuracy of the matrix exponential.
 
-
-\begin{figure}[hbh]
+\begin{figure}[hb]
 \label{CFK:fig:convtest}
 \begin{center}
 \begin{tabular}{cc}
@@ -543,7 +562,7 @@ Ullrich method with a timestep of $10^{-5}$. The results are as follows:
 \caption{Errors with exponential integrating factor methods.}
 \end{figure}
 
-\begin{figure}[hbh]
+\begin{figure}[hb]
 \label{CFK:fig:convtest1}
 \begin{center}
 \begin{tabular}{cc}
@@ -560,6 +579,22 @@ Ullrich method with a timestep of $10^{-5}$. The results are as follows:
 \end{figure}
 
 \section{Conclusions}
+Another important matter to take into consideration is that since the 
+Jacobian at each point can be computed at the beginning of each time step.
+Once we have the Jacobian, the HEVI-Exponential method does not rely 
+on neighboring points at all, so we can parallelize this algorithm so that
+all of the HEVI-Exponential computations can be done at once.
+
+The HEVI-Exponential approach allows us to deal with stiff initial value
+problems with a larger stepsize than a fully explicit method, and the 
+opportunity for parallelization with HOMME-NH offers efficiency. Though 
+the formation of the matrix exponential can be a costly computation, we 
+are able to take advantage of the tridiagonal-like form of the Jacobian in 
+HOMME-NH, to implement the HEVI-Exponential methods quite efficiently.
+
+The parallelization of the HEVI-Exponential methods and their direct 
+comparison with the IMEX RK methods currently implemented in HOMME-NH 
+remains to be studied. This will be further explored an a subsequent paper.
 
 \bibliographystyle{siam}
 % Edit the line below to be your first and last names.
