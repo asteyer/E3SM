@@ -91,7 +91,7 @@ making this a viable alternative to the IMEX Runge-Kutta methods.
 The rest of the paper is structured as follows: In Section 
 \ref{CFK:sec:matexp} we give a brief background of matrix exponentials; 
 Sections \ref{CFK:sec:homme} and \ref{CFK:sec:ifrk} discuss the
-implementation of Integrating Factor Runge-Kutta (IFRK) methods with the
+implementation of integrating factor Runge-Kutta (IFRK) methods with the
 HOMME-NH nonhydrostatic atmosphere model; and numerical results are given 
 in Section \ref{CFK:sec:results}.
 
@@ -126,7 +126,7 @@ us to approximate $e^A$ efficiently and accurately. This implementation is
 further discussed in Section \ref{CFK:sec:homme}.
 
 The error for the $(p,q)$-Pad\'e approximation is given by
-\[ e^A - \left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(A^{p+q+1}).\]
+\[ e^A - \left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(\|A\|^{p+q+1}).\]
 
 If the matrix $A$ has eigenvalues that are spread far apart, this 
 approximation can be especially inaccuarate. To mitigate this problem, we 
@@ -530,14 +530,14 @@ in Table \ref{CFK:tab:rel_err}.
     \end{tabular}}
 \end{table}
 
-Note that the value of $\phi$ is small, so even though the absolute error 
+Note that the value of $w$ is small, so even though the absolute error 
 of the HEVI-Exponential methods is very small, the relative error is rather
  large. Recall from Table \ref{CFK:tab:PadeError} that the error of the 
 $(2,2)$-Pad\`e approximation that we are implementing is $\mathcal{O}(10^{-10})$.
 This doesn't take into account the error from the HEVI-Exponential itself, 
 and combining this with the loss of digits that may happen because of the 
-small values of $\phi$, it is not surprising that the absolute error seems
-to be bounded by $10^{-4}$.
+small values of $w$, it is not surprising that the relative error of $w$ is
+larger than that of the other variables.
 
 We graph these errors in Figure \ref{CFK:fig:convtest}. One thing to note
 is that for each of these variables, the error should increase in 
