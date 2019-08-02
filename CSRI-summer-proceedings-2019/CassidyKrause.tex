@@ -156,20 +156,7 @@ repeatedly to recover the desired matrix exponential $e^{A}$.
 
 \section{Implementation with HOMME-NH}\label{CFK:sec:homme}
 HOMME-NH is a nonhydrostatic atmosphere model whose state variables are
-listed in Table \ref{CFK:tab:variables}. The stiff terms in this model are 
-$w$ and $\phi$, so we can write the governing equations as
-\[q_t \coloneqq \begin{bmatrix} u_t \\
-w_t\\
-\phi_t\\
-\theta_t\\
-\frac{\partial \pi}{\partial \eta}
-\end{bmatrix} = n(q) + s(q) \equiv n(q) + \begin{bmatrix}
-0\\
--\CFKg (1-\mu)\\
-\CFKg w\\
-0\\
-0\end{bmatrix}.\] 
-
+listed in Table \ref{CFK:tab:variables}. 
 \begin{table}[ht]
   \caption{Variables in HOMME-NH}
   \label{CFK:tab:variables}
@@ -178,15 +165,32 @@ w_t\\
       \hline
       \textbf{Variable Name} & \textbf{Description} \\
       \hline
-      $w$                                & Vertical velocity      \\
+      $\CFKg$                            & Gravitational constant \\
       $u$                                & Horizontal velocity    \\
+      $w$                                & Vertical velocity      \\
       $\phi$                             & Geopotential           \\
       $\theta$                           & Potential temperature  \\
-      $\frac{\partial\pi}{\partial\eta}$ &                        \\
+      $\pi$                              &                        \\
+      $\eta$                             &                        \\
+      $\mu$                              &                        \\
       \hline
     \end{tabular}
   \end{center}
 \end{table}
+The stiff terms in this model are 
+$w$ and $\phi$, so we can write the governing equations as
+\[ q_t \coloneqq \begin{bmatrix} u_t \\
+w_t\\
+\phi_t\\
+\theta_t\\
+\frac{\partial \pi}{\partial \eta}
+\end{bmatrix} = n(q) + s(q),\text{ with }
+ s(q) = \begin{bmatrix}
+0\\
+-\CFKg (1-\mu)\\
+\CFKg w\\
+0\\
+0\end{bmatrix}.\]
 
 Linearizing $s(q)$ gives the following Jacobian:
 \[ J = \begin{bmatrix}
@@ -194,20 +198,22 @@ Linearizing $s(q)$ gives the following Jacobian:
  & 0                & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} &  & \\
  & \CFKg \Delta t I & 0                                                 &  & \\
  &                  &                                                   &0 & \\
- &                  &                                                   &  &0\end{bmatrix}.\]
+ &                  &                                                   &  &0\end{bmatrix},\]
 
-So, forming $e^{\alpha J}$ reduces to forming an exponential of 
-\[A \coloneqq \begin{bmatrix}
+where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal.
+
+So, forming $e^{\alpha J}$ reduces to forming an exponential of the 
+tridiagonal-like matrix $A \coloneqq 
+\begin{bmatrix}
    0              & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} \\
- \CFKg \Delta t I & 0  \end{bmatrix},\]
-where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. This form 
-allows us to solve $\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ using 
-tridiagonal solves and back substitution.
+ \CFKg \Delta t I & 0  \end{bmatrix}$. This form allows us to solve 
+$e^A \approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ using tridiagonal solves 
+and back substitution.
 
 To do so, we first factor $Q_{pq}(A)$ as
 \begin{align*}
 Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j\\
-          &= \prod_{j=1}^q\left[\sigma_jI-A\right],
+          &= \kappa\prod_{j=1}^q\left[\sigma_jI-A\right],
 \end{align*}
 where $\sigma_j\in \mathbb{C}$ for $j=1,\dots,q$.
 
@@ -215,32 +221,28 @@ Then, since we want to solve for
 $R \coloneqq \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, we have
 \begin{align*}
 Q_{pq}(A) R &= P_{pq}(A)\\
-\prod_{j=1}^q\left[\sigma_jI-A\right]R &= P_{pq}(A).
+\prod_{j=1}^q\left[\sigma_jI-A\right]R &= \frac{1}{\kappa}P_{pq}(A).
 \end{align*}
 
-Define $R_1 \coloneqq \left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R$.
-Then our equation becomes
-\[ \left[\sigma_1I-A\right]R_1 = P_{pq}(A).\] Note that
-$\left[\sigma_1I-A\right]$ has the following form:
-\[ \left[\sigma_1I-A\right] =
+Define $R_1 \coloneqq \left[\sigma_2I-A\right]\left[\sigma_3I-A\right]
+\cdots\left[\sigma_qI-A\right]R$. Then our equation becomes
+\begin{equation}\label{CFK:eqn:PadeApprox} \left[\sigma_1I-A\right]R_1 
+= \frac{1}{\kappa}P_{pq}(A).\end{equation} Note that
+$\left[\sigma_1I-A\right] =
  \begin{bmatrix} \sigma_1 I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
- -\CFKg\Delta t I          & \sigma_1 I \end{bmatrix}.\]
-
-This form allows us to solve for $R_1$ using far fewer operations than if 
-$\left[\sigma_1I-A\right]$ were a full matrix. We wish to solve 
-\[ \begin{bmatrix} \sigma_1 I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
- -\CFKg\Delta t I          & \sigma_1 I \end{bmatrix} R_1 = P_{pq}(A).\]
-
-For the sake of notation, we write
-\[ R_1 = \begin{bmatrix} Z_1 \\ Z_2\end{bmatrix} \qquad P_{pq}(A) = \begin{bmatrix} P_1 \\ P_2\end{bmatrix}.\]
-
-Then we have
+ -\CFKg\Delta t I            & \sigma_1 I \end{bmatrix}.$ This form allows 
+us to solve for $R_1$ using far fewer operations than if 
+$\left[\sigma_1I-A\right]$ were a full matrix. To do this, we similarly 
+decompose $R_1$ and $\frac{1}{\kappa}P_{pq}(A)$ into block matrices:
+\[ R_1 = \begin{bmatrix} \hat{R_1} \\ \hat{R_2}\end{bmatrix} \qquad P_{pq}(A) = \begin{bmatrix} \hat{P_1} \\ \hat{P_2}\end{bmatrix}.\]
+Then equation \ref{CFK:eqn:PadeApprox} becomes
 \[\begin{bmatrix} \sigma_1 I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
            -\CFKg\Delta t I & \sigma_1 I \end{bmatrix}
-\begin{bmatrix} Z_1 \\
- Z_2 \end{bmatrix} = 
-\begin{bmatrix} P_1 \\
- P_2 \end{bmatrix}.\]
+\begin{bmatrix} \hat{R_1} \\
+ \hat{R_2} \end{bmatrix} = 
+\begin{bmatrix} \hat{P_1} \\
+ \hat{P_2} \end{bmatrix}.\]
+
 If $\sigma_1 = 0$ this decomposes to a tridiagonal linear solve and a trivial solve. 
 If $\sigma_1 \neq 0$, then we left multiply by $\begin{bmatrix} I & 0 \\
                                      \CFKg\Delta t \sigma_1^{-1}I & I \end{bmatrix}$ to obtain:
@@ -248,41 +250,59 @@ If $\sigma_1 \neq 0$, then we left multiply by $\begin{bmatrix} I & 0 \\
  \sigma_1 I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
          0 & \sigma_1 I -\left(\CFKg\Delta t\right)^2  \sigma_1^{-1}\frac{\partial\mu}{\partial\phi}
  \end{bmatrix}
- \begin{bmatrix} Z_1 \\
- Z_2 \end{bmatrix} = 
-\begin{bmatrix} P_1 \\
- \CFKg\Delta t \sigma_1^{-1} P_1 +  P_2 \end{bmatrix}.\]
+ \begin{bmatrix} \hat{R_1} \\
+ \hat{R_2} \end{bmatrix} = 
+\begin{bmatrix} \hat{P_1} \\
+ \CFKg\Delta t \sigma_1^{-1} \hat{P_1} +  \hat{P_2} \end{bmatrix}.\]
 The matrix block $\left[\sigma_1 I -\left(\CFKg\Delta t\right)^2\sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]$ 
 is tridiagonal since $\frac{\partial\mu}{\partial\phi}$ is tridiagonal. 
-Therefore we can solve for $Z_2$ with a tridiagonal solve of 
-\[\left[\sigma_1 I -\left(\CFKg\Delta t \right)^2  \sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]Z_2
- = \CFKg\Delta t\sigma_1^{-1} P_1 +  P_2\]
-and then form $Z_1$ as 
-\[Z_1 = \sigma_1^{-1}\left[P_1 + \CFKg\Delta t\frac{\partial \mu}{\partial \phi}\right] Z_2.\]
+Therefore we can efficiently solve for $\hat{R_2}$ with a tridiagonal 
+solve of 
+\[\left[\sigma_1 I -\left(\CFKg\Delta t \right)^2  \sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]\hat{R_2}
+ = \left[\CFKg\Delta t\sigma_1^{-1} \hat{P_1} +  \hat{P_2}\right]\]
+and then form $\hat{R_1}$ as 
+\[\hat{R_1} = \sigma_1^{-1}\left[P_1 + \CFKg\Delta t\frac{\partial \mu}{\partial \phi}\right] \hat{R_2}.\]
 
-In this way, we have just solved 
-\[ \left[\sigma_1I-A\right]R_1 = P_{pq}(A).\] for $R_1 = \begin{bmatrix} Z_1\\ Z_2\end{bmatrix}$. 
+In this way, we have just solved \ref{CFK:eqn:PadeApprox} for $R_1 = \begin{bmatrix} \hat{R_1}\\ \hat{R_2}\end{bmatrix}$. 
 On the other hand, we also have
 \[\left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R = R_1.\] 
-We can continue in this way, defining 
-$R_j \coloneqq \left[\sigma_{j+1}I-A\right]\left[\sigma_{j+2}I-A\right]\cdots\left[\sigma_qI-A\right]R$
- and solving
-\[\left[\sigma_jI-A\right]R_j = R_{j-1}\] 
-for $R_j$, until we arive at
-\[\left[\sigma_qI-A\right]R = R_{q-1}.\] 
+We can iteratively repeat the same procedure, defining 
+\[R_j \coloneqq \left[\sigma_{j+1}I-A\right]\left[\sigma_{j+2}I-A\right]\cdots\left[\sigma_qI-A\right]R\]
+ and solving 
+\[\left[\sigma_jI-A\right]R_j = R_{j-1}\] for $R_j$, continuing 
+in this way until we arrive at \[\left[\sigma_qI-A\right]R = R_{q-1}.\] 
 Solving this last tridiagonal system gives us the $R = \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)\approx e^A$
  that we are looking for.
 
-Finding $R \approx e^A$ in this way is particularly efficient if the values
- of $p$ and $q$ are small, so that we can analytically find 
-$\{\sigma_j\}_{j=1}^q$ ahead of time. Of course, approximations like this 
-do rather poorly for ill-conditioned matrices, so we must validate that 
-these approximations work for the Jacobians we are interested in. To 
-validate the Pad\'e approximation, we let the model spin up and consider 
-the Jacobian at that time. For this model, our Jacobian will have unique, 
-purely imaginary eigenvalues, so we can calculate the matrix exponential 
-analytically, and compare it to our approximation. The following table 
-gives the results of several diagonal $(p,q)$-Pad\'e approximations, for 
+This algorithm for computing $R \approx e^A$ is particularly efficient if 
+the values of $p$ and $q$ are small, so that we can compute $\{\sigma_j\}_
+{j=1}^q$ by hand ahead of time. To validate the use of a $(p,q)$-Pad\'e 
+approximation, and to determine how large $p$ and $q$ must be, we let the 
+model spin up to 15 days and consider the Jacobian at that timestep. In 
+HOMME-NH, the Jacobian will always have unique, purely imaginary 
+eigenvalues. This allows us to calculate the matrix exponential 
+analytically and compare it to the $(p,q)$-Pad\'e approximation.
+
+To calculate $e^A$ analytically, suppose $\lambda_1, \lambda_2, \dots, 
+\lambda_k$ are the unique eigenvalues of $A$, and $V$ is the matrix of 
+corresponding eigenvectors. Then the Schur decomposition of $A$ is 
+\[A = V \begin{bmatrix} \lambda_1 &           &        &           \\
+                                  & \lambda_2 &        &           \\
+                                  &           & \ddots &           \\
+                                  &           &        & \lambda_k \end{bmatrix}
+ V^{-1},\] and the matrix exponential can be analytically computed to 
+machine precision as
+\begin{align*}
+e^A &= V \exp\left(\begin{bmatrix} \lambda_1 &           &        &           \\
+                                             & \lambda_2 &        &           \\
+                                             &           & \ddots &           \\
+                                             &           &        & \lambda_k \end{bmatrix}\right) V^{-1} \\
+  &= V \begin{bmatrix} e^\lambda_1 &             &        &             \\
+                                   & e^\lambda_2 &        &             \\
+                                   &             & \ddots &             \\
+                                   &             &        & e^\lambda_k \end{bmatrix} V^{-1}.
+\end{align*}
+The following table gives the error of several diagonal $(p,q)$-Pad\'e approximations, for 
 different values of $p=q$.
 \begin{table}[ht]
   \begin{center}
@@ -303,8 +323,9 @@ different values of $p=q$.
 \end{table}
 
 Since a $(2,2)$-Pad\'e approximation yields a considerably accurate matrix 
-exponential and also gives the benefit of taking advantage of the 
-tridiagonal structure, we choose to implement this method.
+exponential and also gives the benefit of easily solving for the 
+coefficients $\{\sigma_1, \sigma_2\}$ ahead of time, this is the 
+approximation we choose to implement in our IFRK methods.
 
 \section{Integrating Factor RK Methods}\label{CFK:sec:ifrk}
 We consider integrating factor Runge-Kutta methods, which were started in 
