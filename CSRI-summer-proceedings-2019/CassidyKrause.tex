@@ -389,13 +389,13 @@ tableaux below.
 \end{align*}
 
 \section{Results}\label{CFK:sec:results}
-The convergence test was done for each of the methods described in section
- \ref{CFK:sec:ifrk}. For the ``truth'', we compare our 
-exponential integrating factor methods to a third order, five stage 
-Ullrich method with a timestep of $10^{-5}$. We calculate the maximum 
-$2$-norm error over all latitudes and longitudes. The absolute error is
-listed in Table \ref{CFK:tab:abs_err}, and the relative error is listed
-in Table \ref{CFK:tab:rel_err}.
+After implementing each of the methods described in Section 
+\ref{CFK:sec:ifrk} into HOMME-NH, we tested their convergence. For the 
+``truth'', we compared our exponential integrating factor methods to a 
+third order, five stage Ullrich method with a timestep of $10^{-5}$, 
+calculating the maximum $2$-norm error over all latitudes and longitudes. 
+The absolute error is listed in Table \ref{CFK:tab:abs_err}, and the 
+relative error is listed in Table \ref{CFK:tab:rel_err}.
 
 \begin{table}[hb]
   \centering
@@ -566,20 +566,21 @@ in Table \ref{CFK:tab:rel_err}.
 \end{table}
 
 Note that the value of $w$ is small, so even though the absolute error 
-of the HEVI-Exponential methods is very small, the relative error is rather
+of the IFRK methods is satisfactory, the relative error is rather
  large. Recall from Table \ref{CFK:tab:PadeError} that the error of the 
 $(2,2)$-Pad\`e approximation that we are implementing is $\mathcal{O}(10^{-10})$.
-This doesn't take into account the error from the HEVI-Exponential itself, 
-and combining this with the loss of digits that may happen because of the 
-small values of $w$, it is not surprising that the relative error of $w$ is
-larger than that of the other variables.
+This doesn't take into account the error from the IFRK method itself, 
+and combining this error with the loss of digits that may happen because of 
+the small values of $w$, it is not surprising that the relative error of 
+$w$ is larger than that of the other variables.
 
 We graph these errors in Figure \ref{CFK:fig:convtest}. One thing to note
 is that for each of these variables, the error should increase in 
 proportion to the time step and the order of the method. That is, an 
 explicit RK method of order $m$ should have a slope of $m$. However, we 
 see that the slope of these methods flattens out as the timestep goes to 
-zero, or as the error is limited by the accuracy of the matrix exponential.
+zero, as the error is limited once again by the accuracy of the matrix 
+exponential.
 
 \begin{figure}[hb]
 \label{CFK:fig:convtest}
@@ -614,22 +615,24 @@ zero, or as the error is limited by the accuracy of the matrix exponential.
 \end{figure}
 
 \section{Conclusions}
-Another important matter to take into consideration is that since the 
-Jacobian at each point can be computed at the beginning of each time step.
-Once we have the Jacobian, the HEVI-Exponential method does not rely 
-on neighboring points at all, so we can parallelize this algorithm so that
-all of the HEVI-Exponential computations can be done at once.
+Another important matter to take into consideration is that the Jacobian 
+at each point of our discretization scheme can be computed at the 
+beginning of each time step, and we can do this computation in parallel. 
+Furthermore, the IFRK methods rely only on the local Jacobian, so we can 
+do the IFRK computation in parallel as well.
 
-The HEVI-Exponential approach allows us to deal with stiff initial value
-problems with a larger stepsize than a fully explicit method, and the 
-opportunity for parallelization with HOMME-NH offers efficiency. Though 
-the formation of the matrix exponential can be a costly computation, we 
-are able to take advantage of the tridiagonal-like form of the Jacobian in 
-HOMME-NH, to implement the HEVI-Exponential methods quite efficiently.
+The IFRK methods allow us to deal with stiff initial value problems with a 
+larger stepsize than a fully explicit method, and the opportunity for 
+parallelization with HOMME-NH offers efficiency. Though the formation of 
+the matrix exponential can be a costly computation, we are able to take 
+advantage of the tridiagonal-like form of the Jacobian in HOMME-NH, to 
+implement the IFRK methods quite efficiently.
 
-The parallelization of the HEVI-Exponential methods and their direct 
-comparison with the IMEX RK methods currently implemented in HOMME-NH 
-remains to be studied. This will be further explored an a subsequent paper.
+More work is needed to determine if IFRK methods can be competitive with 
+the currently implemented IMEX RK methods for HOMME-NH. The opportunities 
+for parallelization and the structure of the Jacobian offer promising 
+efficiency benefits, but a direct comparison of these two methods remains 
+to be done.
 
 \bibliographystyle{siam}
 % Edit the line below to be your first and last names.
