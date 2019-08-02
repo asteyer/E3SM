@@ -106,13 +106,14 @@ results are given in Section \ref{CFK:sec:results}.
 \section{Exponential Methods}\label{CFK:sec:matexp} 
 While exponential integrators allow for a larger time step than explicit 
 methods, a major drawback is the computational cost of forming the matrix
-exponential. For this reason, matrix exponential methods were not widely 
-used for many years, but advances in efficiently forming $e^A$ have 
-recently made exponential methods competetive choices for numerical solvers.
+exponential. For this reason, matrix exponential methods were seldom used 
+in practice for many years, but advances in efficiently forming $e^A$ have 
+recently made exponential methods a competetive choice for numerical 
+solvers.
 
-The matrix exponential $e^A$ can be analytically computed if the matrix $A$
- is diagonalizable, but finding the eigenvalues of $A$ is expensive, and it
- is not generally guaranteed that $A$ is diagonalizable. A more general 
+The matrix exponential $e^A$ can be analytically computed if the matrix $A$ 
+is diagonalizable, but finding the eigenvalues of $A$ is expensive, and it 
+is not generally guaranteed that $A$ is diagonalizable. A more popular 
 approach is to approximate $e^{A}$ using a Pad\'e or Taylor series 
 approximation. Other methods of approximating the matrix exponential are 
 discussed in \cite{CFK:Moler2003}.
@@ -134,22 +135,24 @@ us to approximate $e^A$ efficiently and accurately. This implementation is
 further discussed in Section \ref{CFK:sec:homme}.
 
 The error for the $(p,q)$-Pad\'e approximation is given by
-\[ e^A - \left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(\|A\|^{p+q+1}).\]
+\[ e^A - \left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(\|A\|^{p+q+1}),\]
+though in practice, this may be a particularly pessimistic estimation of 
+the error, as shown in Table \ref{CFK:tab:PadeError}.
 
-If the matrix $A$ has eigenvalues that are spread far apart, this 
-approximation can be especially inaccuarate. To mitigate this problem, we 
-implement a scaling and squaring approach. We briefly outline this 
-procedure here; for further detail and error analysis of the scaling and 
-squaring method, see \cite{CFK:higham2005} and \cite{CFK:Al-Mohy2009}. 
+However, if the matrix $A$ is ill-conditioned, the Pad\'e  approximation 
+can be especially inaccuarate. To mitigate this problem, we implement a 
+scaling and squaring approach. We briefly outline this procedure here; for 
+further detail and error analysis of the scaling and squaring method, see 
+\cite{CFK:higham2005} and \cite{CFK:Al-Mohy2009}. 
 
 To scale $e^A$, we take advantage of the properties of matrix exponentials 
 and write it as
 \[e^{A} = \left(e^{A/k}\right)^k,\]
 where we choose $k$ to be the smallest power of $2$ so that 
-$\|A/k\| \leq 0.5$. With this factorization, the matrix $A$ is scaled down
+$\|A/k\|_2 \leq 0.5$. With this factorization, the matrix $A$ is scaled down
  to $A/k$, and the matrix exponential $e^{A/k}$ is calculated using the 
-Pad\'e formulas above. This matrix exponential is then squared repeatedly to 
-recover the desired matrix exponential $e^{A}$.
+Pad\'e formulas above. The resulting matrix exponential is then squared 
+repeatedly to recover the desired matrix exponential $e^{A}$.
 
 \section{Implementation with HOMME-NH}\label{CFK:sec:homme}
 HOMME-NH is a nonhydrostatic atmosphere model whose state variables are
