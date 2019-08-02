@@ -59,41 +59,49 @@ HOMME-NH.
 \section{Introduction} \label{CFK:sec:intro}
 Stiff initial value problems, like the ones found in HOMME-NH, require a 
 very small step size when solved explicitly. On the other hand, using a 
-fully implicit method is computationally inefficient. To deal with these 
-restrictions, two different approaches have been developed for solving 
-stiff equations.
+fully implicit method requires linear solves, which are computationally 
+inefficient. To deal with these restrictions, two popular approaches have 
+been developed for solving stiff equations: implicit-explicit Runge-Kutta 
+(IMEX RK) methods and exponential-type integrators. We briefly introduce 
+these two types of methods below.
 
 Consider an equation of the form \[ u_t = f(u) = s(u) + n(u),\] where $s(u)$ 
 contains the stiff part of the equation, and $n(u)$ contains the nonstiff 
-part. The current implementation in HOMME-NH uses an implicit Runge-Kutta
-method on $s(u)$, and an explicit Runge-Kutta method to solve $n(u)$. This 
-approach is efficient and accurate, but with recent advances in 
-exponential-type integrators, it is worth examining their performance as 
-well.
+part. IMEX RK methods use an implicit Runge-Kutta method on $s(u)$, and an 
+explicit Runge-Kutta method to solve $n(u)$. This approach is efficient and 
+accurate, and for this reason, IMEX RK methods are currently implemented 
+with the HEVI partitioning in HOMME-NH. That is, an explicit RK method is 
+used for the horizontal part, and an implicit RK method is used on the 
+vertical part.
 
-In this paper, we consider integrating factor Runge-Kutta methods (IFRKs). 
-In this case, we split our method as \[ u_t = f(u_m) = L_mu_m + N(u_m),\] 
-where $L_m$ is a linear operator containing the stiff part of the equation, 
-and $N(u_m) = f(u_m)-L_mu_m$ contains the nonstiff terms. Often, 
-$L_m = f'(u_m)$, but we do not assume this is the case. Using the change of
- variables $v(t) = e^{-L_m(t-t_m)}u(t)$, we have
+In this paper, we consider a class of exponential integrators, namely 
+integrating factor Runge-Kutta (IFRK) methods, as an alternative solver for 
+the HOMME-NH nonhydrostatic model. With IFRK methods, we split our equation 
+as \[ u_t = f(u_m) = L_mu_m + N(u_m),\] where $L_m$ is a linear operator 
+containing the stiff part of the equation, and $N(u_m) = f(u_m)-L_mu_m$ 
+contains the nonstiff terms. Often, $L_m = f'(u_m)$, but we do not assume 
+this is the case. Using the change of variables $v(t) = 
+e^{-L_m(t-t_m)}u(t)$, we have
 \begin{equation}\label{CFK:eqn:vode}
 v_t = e^{-L_m(t-t_m)}N(e^{L_m(t-t_m)}v).
 \end{equation} 
-We can now use a fully explicit $r-$stage Runge Kutta method to solve 
+With this new formulation, we can now use a fully explicit $r-$stage RK 
+method to solve 
 \ref{CFK:eqn:vode}.
 
-The most expensive part of these IFRK methods is the formation of the 
-matrix exponential. However, the structure of the Jacobian in HOMME-NH 
-allows us to form these matrix exponentials efficiently and in parallel, 
-making this a viable alternative to the IMEX Runge-Kutta methods.
+The most expensive part of any exponential-type integrator, including IFRK 
+methods, is the formation of the matrix exponential. However, the structure 
+of the Jacobian in HOMME-NH allows us to form these matrix exponentials 
+efficiently and in parallel, making this a viable alternative to the IMEX 
+Runge-Kutta methods.
 
 The rest of the paper is structured as follows: In Section 
-\ref{CFK:sec:matexp} we give a brief background of matrix exponentials; 
-Sections \ref{CFK:sec:homme} and \ref{CFK:sec:ifrk} discuss the
-implementation of integrating factor Runge-Kutta (IFRK) methods with the
-HOMME-NH nonhydrostatic atmosphere model; and numerical results are given 
-in Section \ref{CFK:sec:results}.
+\ref{CFK:sec:matexp} we give a brief background of numerically 
+approximating the matrix exponential; Section \ref{CFK:sec:homme} discusses 
+the implementation of integrating factor Runge-Kutta (IFRK) methods with 
+the HOMME-NH nonhydrostatic atmosphere model; Section \ref{CFK:sec:ifrk} 
+details the specific IFRK methods we use in this paper; and numerical 
+results are given in Section \ref{CFK:sec:results}.
 
 \section{Exponential Methods}\label{CFK:sec:matexp} 
 While exponential integrators allow for a larger time step than explicit 
