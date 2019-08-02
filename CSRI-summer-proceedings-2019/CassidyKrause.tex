@@ -327,15 +327,18 @@ exponential and also gives the benefit of easily solving for the
 coefficients $\{\sigma_1, \sigma_2\}$ ahead of time, this is the 
 approximation we choose to implement in our IFRK methods.
 
-\section{Integrating Factor RK Methods}\label{CFK:sec:ifrk}
-We consider integrating factor Runge-Kutta methods, which were started in 
-\cite{CFK:Lawson1969}, shown to be a type of exponential method RK method by
-\cite{CFK:Minchev2006}, and SSP by \cite{CFK:Isherwood2018}.
+\section{Integrating Factor Runge-Kutta Methods}\label{CFK:sec:ifrk}
+The focus of this paper is to implement IFRK methods in the HOMME-NH 
+nonhydrostatic atmosphere model. IFRK methods were introduced in 
+\cite{CFK:Lawson1969}, shown to be a type of exponential RK method by
+\cite{CFK:Minchev2006}, and proven to be strong stability preserving (SSP) 
+by \cite{CFK:Isherwood2018}.
 
-We consider several explicit $r$-stage Runge-Kutta methods to solve equation
-\ref{CFK:eqn:vode}. If the Butcher tableau is given by $\begin{array}{c|c}
-c & A \\ \hline & b^T \end{array}$, then the solution to \ref{CFK:eqn:vode} with
-initial condition $v(t_0) = v_0$ and step-size $\Delta t$ is given by
+For IFRK methods, we use an explicit $r$-stage Runge-Kutta method to solve 
+equation \ref{CFK:eqn:vode}. If the Butcher tableau is given by 
+$\begin{array}{c|c}
+c & A \\ \hline & b^T \end{array}$, then the solution to \ref{CFK:eqn:vode} 
+with initial condition $v(t_0) = v_0$ and step-size $\Delta t$ is given by
 \[ \left\{\begin{array}{l} v_{m+1} = v_m + \Delta t\sum_{k=1}^r b_k 
                          e^{-L_m(t_{m,k}-t_m)}N(e^{L_m(t_{m,k}-t_m)}g_k) \\
           g_j = v_m + \Delta t \sum_{k=1}^r A_{j,k} e^{-L_m(t_{m,k} - t_m)} 
@@ -343,8 +346,8 @@ initial condition $v(t_0) = v_0$ and step-size $\Delta t$ is given by
 for $j = 1,\dots,r$, where $t_{m,k} = t_m + c_k \Delta t$.
 The naming convention we use for the explicit $r$-stage RK methods is ``$ERK
 -nm$,'' where $n$ is the order of the method, and $m$ is the number of
-stages. The four methods we consider are given by the Butcher tableaux 
-below.
+stages. Here, we consider four explicit RK methods, given by the Butcher 
+tableaux below.
 \begin{align*}&\text{ERK-}13:
  \begin{array}{c|ccc}
 0   & 0   & 0 & 0\\
