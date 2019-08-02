@@ -14,6 +14,8 @@
 \newcommand{\SSSnorm}[1]{\left\Vert#1\right\Vert}
 \newcommand{\SSSabs}[1]{\left\vert#1\right\vert}
 \newcommand{\CFKg}{\mathfrak{g}}
+\newcommand{\CFKU}{\mathcal{U}}
+\newcommand{\CFKV}{\mathcal{V}}
 
 % This controls the table-of-contents entry in the proceedings. Edit it
 % to include your article title followed by the authors' names, as shown.
@@ -46,9 +48,9 @@ Nonhydrostatic Atmosphere Model\\
 Time-stepping in the HOMME-NH nonhydrostatic atmosphere model requires 
 integration of a stiff initial value problem. The current standard is to
  solve these equations using implicit-explicit Runge-Kutta (IMEX RK) 
-methods with a horizontally explicit - vertically implicit (HEVI) 
-partitioning. We introduce a horizontally explicit - vertically integrating
- factor exponential method (HEVI-Exponential) as an alternative to solving 
+methods with a horizontally explicit vertically implicit (HEVI) 
+partitioning. We introduce a horizontally explicit vertically integrating
+ factor exponential (HEVIE) method as an alternative to solving 
 these stiff equations. The main drawback to exponential methods is the cost
  of forming the matrix exponential. Here, we show that we can mitigate this 
 cost by taking advantage of the tridiagonal-like form of our Jacobian and 
@@ -57,49 +59,48 @@ HOMME-NH.
 \end{abstract}
 
 \section{Introduction} \label{CFK:sec:intro}
-Stiff initial value problems, like the ones found in HOMME-NH, require a 
-very small step size when solved explicitly. On the other hand, using a 
-fully implicit method requires linear solves, which are computationally 
-inefficient. To deal with these restrictions, two popular approaches have 
+Stiff initial value problems, like the ones found in HOMME-NH 
+nonhydrostatic atmosphere model, require a very small step-size when 
+integrated with an explicit method. On the other hand, using a fully 
+implicit method requires nonlinear solves, which are computationally 
+expensive. To deal with these restrictions, two popular approaches have 
 been developed for solving stiff equations: implicit-explicit Runge-Kutta 
 (IMEX RK) methods and exponential-type integrators. We briefly introduce 
 these two types of methods below.
 
-Consider an equation of the form \[ u_t = f(u) = s(u) + n(u),\] where $s(u)$ 
-contains the stiff part of the equation, and $n(u)$ contains the nonstiff 
-part. IMEX RK methods use an implicit Runge-Kutta method on $s(u)$, and an 
-explicit Runge-Kutta method to solve $n(u)$. This approach is efficient and 
-accurate, and for this reason, IMEX RK methods are currently implemented 
-with the HEVI partitioning in HOMME-NH. That is, an explicit RK method is 
-used for the horizontal part, and an implicit RK method is used on the 
-vertical part.
+Consider an equation of the form \[ \CFKU_t = f(\CFKU) = s(\CFKU) + 
+n(\CFKU),\] where $s(\CFKU)$ contains the stiff part of the equation, and 
+$n(\CFKU)$ contains the nonstiff part. IMEX RK methods use an implicit RK 
+method on $s(\CFKU)$, and an explicit RK method to solve $n(\CFKU)$. This 
+approach is efficient and accurate, and for this reason, IMEX RK methods 
+are currently implemented with the HEVI partitioning in HOMME-NH. That is, 
+an explicit RK method is used for the horizontal part, and an implicit RK 
+method is used on the vertical part.
 
 In this paper, we consider a class of exponential integrators, namely 
 integrating factor Runge-Kutta (IFRK) methods, as an alternative solver for 
-the HOMME-NH nonhydrostatic model. With IFRK methods, we split our equation 
-as \[ u_t = f(u_m) = L_mu_m + N(u_m),\] where $L_m$ is a linear operator 
-containing the stiff part of the equation, and $N(u_m) = f(u_m)-L_mu_m$ 
-contains the nonstiff terms. Often, $L_m = f'(u_m)$, but we do not assume 
-this is the case. Using the change of variables $v(t) = 
-e^{-L_m(t-t_m)}u(t)$, we have
+HOMME-NH. With IFRK methods, we split our equation 
+as \[ \CFKU_t = f(\CFKU) = L_m\CFKU +  N_m(\CFKU),\] where $L_m$ is a linear operator 
+containing the stiff part of the equation, and $N_m(\CFKU) = f(\CFKU)-L_m\CFKU$ 
+contains the nonstiff terms. Often, $L_m = f'(\CFKU)$, but we do not assume 
+this is the case. Using the change of variables $\CFKV(t) = 
+e^{-L_m(t-t_m)}\CFKU(t)$, we have
 \begin{equation}\label{CFK:eqn:vode}
-v_t = e^{-L_m(t-t_m)}N(e^{L_m(t-t_m)}v).
+\CFKV_t = e^{-L_m(t-t_m)}N(e^{L_m(t-t_m)}\CFKV).
 \end{equation} 
 With this new formulation, we can now use a fully explicit $r-$stage RK 
-method to solve 
-\ref{CFK:eqn:vode}.
+method to solve equation \ref{CFK:eqn:vode}.
 
 The most expensive part of any exponential-type integrator, including IFRK 
 methods, is the formation of the matrix exponential. However, the structure 
 of the Jacobian in HOMME-NH allows us to form these matrix exponentials 
-efficiently and in parallel, making this a viable alternative to the IMEX 
-Runge-Kutta methods.
+quickly and in parallel, making this a viable alternative to the IMEX 
+RK methods.
 
 The rest of the paper is structured as follows: In Section 
 \ref{CFK:sec:matexp} we give a brief background of numerically 
 approximating the matrix exponential; Section \ref{CFK:sec:homme} discusses 
-the implementation of integrating factor Runge-Kutta (IFRK) methods with 
-the HOMME-NH nonhydrostatic atmosphere model; Section \ref{CFK:sec:ifrk} 
+the implementation of IFRK methods with HOMME-NH; Section \ref{CFK:sec:ifrk} 
 details the specific IFRK methods we use in this paper; and numerical 
 results are given in Section \ref{CFK:sec:results}.
 
@@ -107,7 +108,7 @@ results are given in Section \ref{CFK:sec:results}.
 While exponential integrators allow for a larger time step than explicit 
 methods, a major drawback is the computational cost of forming the matrix
 exponential. For this reason, matrix exponential methods were seldom used 
-in practice for many years, but advances in efficiently forming $e^A$ have 
+in practice, but advances in efficiently forming $e^A$ have 
 recently made exponential methods a competetive choice for numerical 
 solvers.
 
@@ -165,34 +166,34 @@ listed in Table \ref{CFK:tab:variables}.
       \hline
       \textbf{Variable Name} & \textbf{Description} \\
       \hline
-      $\CFKg$                            & Gravitational constant \\
-      $u$                                & Horizontal velocity    \\
-      $w$                                & Vertical velocity      \\
-      $\phi$                             & Geopotential           \\
-      $\theta$                           & Potential temperature  \\
-      $\pi$                              &                        \\
-      $\eta$                             &                        \\
-      $\mu$                              &                        \\
+      $\CFKg$                       & Gravitational constant                                  \\
+      $\vec{u}=\left(u,v\right)^T$  & Horizontal velocity                                     \\
+      $w$                           & Vertical velocity                                       \\
+      $\phi$                        & Geopotential                                            \\
+      $\theta$                      & Potential temperature                                   \\
+      $\pi$                         & Hydrostatic pressure                                    \\
+      $\eta$                        & Mass-based hybrid terrain-following vertical coordinate \\
+      $\mu$                         &                        \\
       \hline
     \end{tabular}
   \end{center}
 \end{table}
 The stiff terms in this model are 
 $w$ and $\phi$, so we can write the governing equations as
-\[ q_t \coloneqq \begin{bmatrix} u_t \\
+\[ \CFKU_t \coloneqq \begin{bmatrix} \vec{u_t} \\
 w_t\\
 \phi_t\\
 \theta_t\\
 \frac{\partial \pi}{\partial \eta}
-\end{bmatrix} = n(q) + s(q),\text{ with }
- s(q) = \begin{bmatrix}
+\end{bmatrix} = n(\CFKU) + s(\CFKU),\text{ with }
+ s(\CFKU) = \begin{bmatrix}
 0\\
 -\CFKg (1-\mu)\\
 \CFKg w\\
 0\\
 0\end{bmatrix}.\]
 
-Linearizing $s(q)$ gives the following Jacobian:
+Linearizing $s(\CFKU)$ gives the following Jacobian:
 \[ J = \begin{bmatrix}
 0&                  &                                                   &  & \\
  & 0                & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} &  & \\
@@ -200,17 +201,24 @@ Linearizing $s(q)$ gives the following Jacobian:
  &                  &                                                   &0 & \\
  &                  &                                                   &  &0\end{bmatrix},\]
 
-where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal.
+where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. Then
+\[ e^J = \begin{bmatrix}
+I&                                                                     &  & \\
+ & \exp\left(\begin{bmatrix}0 & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} \\ 
+  \CFKg \Delta t I & 0     \end{bmatrix}\right)     &  & \\                                      
+ &                                                                     &I & \\
+ &                                                                     &  &I\end{bmatrix}.\]
 
 So, forming $e^{\alpha J}$ reduces to forming an exponential of the 
 tridiagonal-like matrix $A \coloneqq 
 \begin{bmatrix}
    0              & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} \\
- \CFKg \Delta t I & 0  \end{bmatrix}$. This form allows us to solve 
-$e^A \approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ using tridiagonal solves 
-and back substitution.
+ \CFKg \Delta t I & 0  \end{bmatrix}$, and the matrix exponential will 
+only act on variables $w$ and $\phi$. 
 
-To do so, we first factor $Q_{pq}(A)$ as
+The structure of $A$ allows us to solve 
+$e^A \approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ using tridiagonal solves 
+and back substitution. To do so, we first factor $Q_{pq}(A)$ as
 \begin{align*}
 Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j\\
           &= \kappa\prod_{j=1}^q\left[\sigma_jI-A\right],
@@ -256,14 +264,14 @@ If $\sigma_1 \neq 0$, then we left multiply by $\begin{bmatrix} I & 0 \\
  \CFKg\Delta t \sigma_1^{-1} \hat{P_1} +  \hat{P_2} \end{bmatrix}.\]
 The matrix block $\left[\sigma_1 I -\left(\CFKg\Delta t\right)^2\sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]$ 
 is tridiagonal since $\frac{\partial\mu}{\partial\phi}$ is tridiagonal. 
-Therefore we can efficiently solve for $\hat{R_2}$ with a tridiagonal 
-solve of 
+Therefore we can solve for $\hat{R_2}$ with a tridiagonal 
+solve:
 \[\left[\sigma_1 I -\left(\CFKg\Delta t \right)^2  \sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]\hat{R_2}
- = \left[\CFKg\Delta t\sigma_1^{-1} \hat{P_1} +  \hat{P_2}\right]\]
+ = \left[\CFKg\Delta t\sigma_1^{-1} \hat{P_1} +  \hat{P_2}\right],\]
 and then form $\hat{R_1}$ as 
 \[\hat{R_1} = \sigma_1^{-1}\left[P_1 + \CFKg\Delta t\frac{\partial \mu}{\partial \phi}\right] \hat{R_2}.\]
 
-In this way, we have just solved \ref{CFK:eqn:PadeApprox} for $R_1 = \begin{bmatrix} \hat{R_1}\\ \hat{R_2}\end{bmatrix}$. 
+In this way, we have just solved equation \ref{CFK:eqn:PadeApprox} for $R_1 = \begin{bmatrix} \hat{R_1}\\ \hat{R_2}\end{bmatrix}$. 
 On the other hand, we also have
 \[\left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R = R_1.\] 
 We can iteratively repeat the same procedure, defining 
@@ -334,10 +342,10 @@ nonhydrostatic atmosphere model. IFRK methods were introduced in
 \cite{CFK:Minchev2006}, and proven to be strong stability preserving (SSP) 
 by \cite{CFK:Isherwood2018}.
 
-For IFRK methods, we use an explicit $r$-stage Runge-Kutta method to solve 
+For IFRK methods, we use an explicit $r$-stage RK method to solve 
 equation \ref{CFK:eqn:vode}. If the Butcher tableau is given by 
 $\begin{array}{c|c}
-c & A \\ \hline & b^T \end{array}$, then the solution to \ref{CFK:eqn:vode} 
+c & A \\ \hline & b^T \end{array}$, then the solution to equation \ref{CFK:eqn:vode} 
 with initial condition $v(t_0) = v_0$ and step-size $\Delta t$ is given by
 \[ \left\{\begin{array}{l} v_{m+1} = v_m + \Delta t\sum_{k=1}^r b_k 
                          e^{-L_m(t_{m,k}-t_m)}N(e^{L_m(t_{m,k}-t_m)}g_k) \\
@@ -392,10 +400,14 @@ tableaux below.
 After implementing each of the methods described in Section 
 \ref{CFK:sec:ifrk} into HOMME-NH, we tested their convergence. For the 
 ``truth'', we compared our exponential integrating factor methods to a 
-third order, five stage Ullrich method with a timestep of $10^{-5}$, 
-calculating the maximum $2$-norm error over all latitudes and longitudes. 
-The absolute error is listed in Table \ref{CFK:tab:abs_err}, and the 
-relative error is listed in Table \ref{CFK:tab:rel_err}.
+third order, five stage Ullrich method (described in \cite{CFK:Guerra2016}) 
+with a timestep of $10^{-5}$, calculating the maximum $2$-norm error over 
+all latitudes and longitudes. To verify our methods, we calculate the error 
+of the stiff variables, $w$ and $\phi$, which the matrix exponential acts 
+upon. We also calculate the error of $u$ and $v$, which the matrix 
+exponential does not affect, as reference variables. The absolute errors 
+are listed in Table \ref{CFK:tab:abs_err}, and the relative errors are 
+listed in Table \ref{CFK:tab:rel_err}.
 
 \begin{table}[ht]
   \centering
@@ -572,15 +584,12 @@ and combining this error with the loss of digits that may happen because of
 the small values of $w$, it is not surprising that the relative error of 
 $w$ is larger than that of the other variables.
 
-We graph these errors in Figure \ref{CFK:fig:convtest}. One thing to note
-is that for each of these variables, the error should increase in 
-proportion to the time step and the order of the method. That is, an 
-explicit RK method of order $m$ should have a slope of $m$. However, we 
-see that the slope of these methods flattens out as the timestep goes to 
-zero, as the error is limited once again by the accuracy of the matrix 
-exponential.
+We graph these errors in Figure \ref{CFK:fig:convtest}. The slope of these 
+methods flattens out as the timestep goes to zero. One possible 
+explanation for this is that the accuracy may be limited by the accuracy of 
+the matrix exponential.
 
-\begin{figure}[hb]
+\begin{figure}[ht]
 \label{CFK:fig:convtest}
 \begin{center}
 \begin{tabular}{cc}
@@ -616,22 +625,25 @@ exponential.
 Another important matter to take into consideration is that the Jacobian 
 at each point of our discretization scheme can be computed at the 
 beginning of each time step, and we can do this computation in parallel. 
-Furthermore, the IFRK methods rely only on the local Jacobian, so we can 
-do the IFRK computation in parallel as well.
+Furthermore, the IFRK methods rely only on the local-in-time Jacobian, so 
+we can do the IFRK computation in parallel as well.
 
 The IFRK methods allow us to deal with stiff initial value problems with a 
-larger stepsize than a fully explicit method, and the opportunity for 
-parallelization with HOMME-NH offers efficiency. Though the formation of 
+larger step-size than a fully explicit method, and the opportunity for 
+parallelization with HOMME-NH boosts efficiency. Though the formation of 
 the matrix exponential can be a costly computation, we are able to take 
 advantage of the tridiagonal-like form of the Jacobian in HOMME-NH, to 
-implement the IFRK methods quite efficiently.
+implement the IFRK methods in a way that mitigates the cost of forming the 
+matrix exponential.
 
-More work is needed to determine if IFRK methods can be competitive with 
-the currently implemented IMEX RK methods for HOMME-NH. The opportunities 
-for parallelization and the structure of the Jacobian offer promising 
-efficiency benefits, but a direct comparison of these two methods remains 
-to be done.
+We have shown that IFRK methods are accurate and can be implemented in 
+parallel. However, more work is needed to compare the efficiency of these 
+methods, which will determine if IFRK methods can be competitive with 
+the IMEX RK methods that are currently implemented in HOMME-NH. In 
+particular, the efficiency of the IFRK methods will depend on how large of 
+a step-size they can take, and this remains to be done.
 
+\newpage
 \bibliographystyle{siam}
 % Edit the line below to be your first and last names.
 \bibliography{CassidyKrause}
