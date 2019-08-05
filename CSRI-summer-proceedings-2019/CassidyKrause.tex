@@ -46,50 +46,54 @@ Nonhydrostatic Atmosphere Model\\
 % Include your abstract here.
 \begin{abstract}
 Time-stepping in the HOMME-NH nonhydrostatic atmosphere model requires 
-integration of a stiff initial value problem. The current standard is to
- solve these equations using implicit-explicit Runge-Kutta (IMEX RK) 
+integration of a stiff initial value problem. The current standard is to 
+solve these equations using implicit-explicit Runge-Kutta (IMEX RK) 
 methods with a horizontally explicit vertically implicit (HEVI) 
-partitioning. We introduce a horizontally explicit vertically integrating
- factor exponential (HEVIE) method as an alternative to solving 
-these stiff equations. The main drawback to exponential methods is the cost
- of forming the matrix exponential. Here, we show that we can mitigate this 
-cost by taking advantage of the tridiagonal-like form of our Jacobian and 
-parallelizing our computations, making this solver an attractive option for
-HOMME-NH.
+partitioning. We introduce a horizontally explicit vertically integrating 
+factor exponential (HEVIE) method as an alternative to solving 
+these stiff equations. The benefit of exponential methods is that they 
+allow a larger step-size than explicit methods; however, their main 
+drawback is the cost of forming the matrix exponential. Here, we show that 
+we can mitigate this cost by taking advantage of the tridiagonal-like form 
+of our Jacobian and parallelizing our computations, making this solver an 
+attractive option for HOMME-NH.
 \end{abstract}
 
 \section{Introduction} \label{CFK:sec:intro}
-Stiff initial value problems, like the ones found in HOMME-NH 
-nonhydrostatic atmosphere model, require a very small step-size when 
-integrated with an explicit method. On the other hand, using a fully 
-implicit method requires nonlinear solves, which are computationally 
-expensive. To deal with these restrictions, two popular approaches have 
-been developed for solving stiff equations: implicit-explicit Runge-Kutta 
-(IMEX RK) methods and exponential-type integrators. We briefly introduce 
-these two types of methods below.
+Stiff initial value problems, like those found in the HOMME-NH 
+nonhydrostatic atmosphere model (for a description of HOMME-NH, see 
+\cite{CFK:preprint}), require a small step-size when integrated 
+with an explicit method. On the other hand, using a fully implicit method 
+requires nonlinear solves, which are computationally expensive. To deal 
+with these restrictions, many approaches have been developed for solving 
+stiff equations. One of these approaches is implicit-explicit Runge-Kutta 
+(IMEX RK) methods, which are currently implemented in HOMME-NH. A second 
+approach to solving stiff initial value problems is exponential-type 
+integrators, which we consider in this paper as an alternative to IMEX RK 
+methods for HOMME-NH. We briefly introduce these two types of methods 
+below.
 
 Consider an equation of the form \[ \CFKU_t = f(\CFKU) = s(\CFKU) + 
 n(\CFKU),\] where $s(\CFKU)$ contains the stiff part of the equation, and 
 $n(\CFKU)$ contains the nonstiff part. IMEX RK methods use an implicit RK 
-method on $s(\CFKU)$, and an explicit RK method to solve $n(\CFKU)$. This 
-approach is efficient and accurate, and for this reason, IMEX RK methods 
-are currently implemented with the HEVI partitioning in HOMME-NH. That is, 
-an explicit RK method is used for the horizontal part, and an implicit RK 
-method is used on the vertical part.
+method on $s(\CFKU)$, and an explicit RK method to integrate $n(\CFKU)$. 
+These IMEX RK methods are implemented in HOMME-NH with a horizontally 
+explicit vertically implicit (HEVI) partitioning \cite{CFK:Steyer2019},
+\cite{CFK:Vogl2019}.
 
 In this paper, we consider a class of exponential integrators, namely 
 integrating factor Runge-Kutta (IFRK) methods, as an alternative solver for 
-HOMME-NH. With IFRK methods, we split our equation 
-as \[ \CFKU_t = f(\CFKU) = L_m\CFKU +  N_m(\CFKU),\] where $L_m$ is a linear operator 
-containing the stiff part of the equation, and $N_m(\CFKU) = f(\CFKU)-L_m\CFKU$ 
-contains the nonstiff terms. Often, $L_m = f'(\CFKU)$, but we do not assume 
-this is the case. Using the change of variables $\CFKV(t) = 
-e^{-L_m(t-t_m)}\CFKU(t)$, we have
-\begin{equation}\label{CFK:eqn:vode}
-\CFKV_t = e^{-L_m(t-t_m)}N(e^{L_m(t-t_m)}\CFKV).
-\end{equation} 
-With this new formulation, we can now use a fully explicit $r-$stage RK 
-method to solve equation \ref{CFK:eqn:vode}.
+HOMME-NH with a horizontally explicit vertically integrating factor 
+exponential (HEVIE) partitioning. With IFRK methods, we split our equation 
+as \[ \CFKU_t = f(\CFKU) = L_m\CFKU +  N_m(\CFKU),\] where $L_m$ is a 
+linear operator containing the stiff part of the equation, and $N_m(\CFKU) 
+= f(\CFKU)-L_m\CFKU$ contains the nonstiff terms. Often, $L_m = f'(\CFKU)$, 
+but we do not assume this is the case. Using the change of variables 
+$\CFKV(t) = e^{-L_m(t-t_m)}\CFKU(t)$, we have \begin{equation}
+\label{CFK:eqn:vode}
+\CFKV_t = e^{-L_m(t-t_m)}N(e^{L_m(t-t_m)}\CFKV). \end{equation} 
+We then use a fully explicit $r-$stage RK method to solve equation 
+\ref{CFK:eqn:vode}, as explained in Section \ref{CFK:sec:ifrk}.
 
 The most expensive part of any exponential-type integrator, including IFRK 
 methods, is the formation of the matrix exponential. However, the structure 
@@ -98,19 +102,20 @@ quickly and in parallel, making this a viable alternative to the IMEX
 RK methods.
 
 The rest of the paper is structured as follows: In Section 
-\ref{CFK:sec:matexp} we give a brief background of numerically 
-approximating the matrix exponential; Section \ref{CFK:sec:homme} discusses 
-the implementation of IFRK methods with HOMME-NH; Section \ref{CFK:sec:ifrk} 
+\ref{CFK:sec:matexp} we give a brief background of numerical approximations 
+of the matrix exponential; Section \ref{CFK:sec:homme} discusses the 
+implementation of IFRK methods with HOMME-NH; Section \ref{CFK:sec:ifrk} 
 details the specific IFRK methods we use in this paper; and numerical 
 results are given in Section \ref{CFK:sec:results}.
 
-\section{Exponential Methods}\label{CFK:sec:matexp} 
+\section{Numerical Approximation of the Matrix Exponential}
+\label{CFK:sec:matexp} 
 While exponential integrators allow for a larger time step than explicit 
-methods, a major drawback is the computational cost of forming the matrix
+methods, a major drawback is the computational cost of forming the matrix 
 exponential. For this reason, matrix exponential methods were seldom used 
-in practice, but advances in efficiently forming $e^A$ have 
-recently made exponential methods a competetive choice for numerical 
-solvers.
+in practice, but advances in efficiently forming $e^A$ have recently made 
+exponential-type methods a competetive choice for integrating stiff initial 
+value problems (\cite{CFK:Garcia2014}, \cite{CFK:Clancy2013}).
 
 The matrix exponential $e^A$ can be analytically computed if the matrix $A$ 
 is diagonalizable, but finding the eigenvalues of $A$ is expensive, and it 
@@ -123,41 +128,49 @@ We choose to implement a $(p,q)$-Pad\'e approximation
 $e^{A}\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, where $P_{pq}(A)$ and 
 $Q_{pq}(A)$ are defined as follows:
 
-\begin{align*}
+\begin{align}
+\label{CFK:eqn:PadeP}
 P_{pq}(A) &= \sum_{j=0}^p\frac{(p+q-j)!p!}{(p+q)!j!(p-j)!}A^j\\
+\label{CFK:eqn:PadeQ}
 Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j
-\end{align*}
+\end{align}
 
 After we calculate the terms $P_{pq}$ and $Q_{pq}$, the product 
-$e^A\approx\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ is a potentially 
-expensive computation because of the matrix inversion. Fortunately, for our
- application, the matrix $A$ we consider has a special structure that allows
+$e^A\approx\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ is a potentially expensive 
+computation because of the matrix inversion. Fortunately, for our 
+application, the matrix $A$ we consider has a special structure that allows 
 us to approximate $e^A$ efficiently and accurately. This implementation is 
 further discussed in Section \ref{CFK:sec:homme}.
 
 The error for the $(p,q)$-Pad\'e approximation is given by
-\[ e^A - \left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(\|A\|^{p+q+1}),\]
+\[e^A-\left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(\|A\|^{p+q+1}),\] 
 though in practice, this may be a particularly pessimistic estimation of 
-the error, as shown in Table \ref{CFK:tab:PadeError}.
-
-However, if the matrix $A$ is ill-conditioned, the Pad\'e  approximation 
-can be especially inaccuarate. To mitigate this problem, we implement a 
-scaling and squaring approach. We briefly outline this procedure here; for 
-further detail and error analysis of the scaling and squaring method, see 
-\cite{CFK:higham2005} and \cite{CFK:Al-Mohy2009}. 
+the error, as shown in Table \ref{CFK:tab:PadeError}. If the matrix $A$ is 
+ill-conditioned, the Pad\'e  approximation can be especially inaccuarate. 
+To mitigate this problem, we implement a scaling and squaring approach. We 
+briefly outline this procedure here; for further detail and error analysis 
+of the scaling and squaring method, see \cite{CFK:higham2005} and 
+\cite{CFK:Al-Mohy2009}. 
 
 To scale $e^A$, we take advantage of the properties of matrix exponentials 
 and write it as
 \[e^{A} = \left(e^{A/k}\right)^k,\]
-where we choose $k$ to be the smallest power of $2$ so that 
-$\|A/k\|_2 \leq 0.5$. With this factorization, the matrix $A$ is scaled down
- to $A/k$, and the matrix exponential $e^{A/k}$ is calculated using the 
-Pad\'e formulas above. The resulting matrix exponential is then squared 
-repeatedly to recover the desired matrix exponential $e^{A}$.
+where we choose $k$ to be the smallest power of $2$ so that $\|A/k\|_2
+\leq 0.5$. With this factorization, the matrix $A$ is scaled down to $A/k$, 
+and the matrix exponential $e^{A/k}$ is calculated using the Pad\'e 
+formulas given in equations \ref{CFK:eqn:PadeP} and \ref{CFK:eqn:PadeQ}. 
+The resulting matrix exponential is then squared repeatedly to recover the 
+desired matrix exponential $e^{A}$. This numerical approximation to the 
+matrix exponential $e^A$ is then used with an explicit $r$-stage RK method, 
+as described in Section \ref{CFK:sec:ifrk}, to solve equation 
+\ref{CFK:eqn:vode}.
 
 \section{Implementation with HOMME-NH}\label{CFK:sec:homme}
-HOMME-NH is a nonhydrostatic atmosphere model whose state variables are
-listed in Table \ref{CFK:tab:variables}. 
+As mentioned in Section \ref{CFK:sec:matexp}, the specific structure of 
+the Jacobian in HOMME-NH allows us to form the matrix exponential $e^A 
+\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ efficiently. HOMME-NH is a 
+nonhydrostatic atmosphere model whose state variables are listed in Table 
+\ref{CFK:tab:variables}. 
 \begin{table}[ht]
   \caption{Variables in HOMME-NH}
   \label{CFK:tab:variables}
