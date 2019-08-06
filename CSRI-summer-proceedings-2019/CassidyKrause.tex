@@ -61,9 +61,9 @@ attractive option for HOMME-NH.
 
 \section{Introduction} \label{CFK:sec:intro}
 Stiff initial value problems, like those found in the HOMME-NH 
-nonhydrostatic atmosphere model (for a description of HOMME-NH, see 
-\cite{CFK:preprint}), require a small step-size when integrated 
-with an explicit method. On the other hand, using a fully implicit method 
+nonhydrostatic atmosphere model, require a small step-size when integrated 
+with an explicit method. (For a thorough description of HOMME-NH, see 
+\cite{CFK:preprint}.) On the other hand, using a fully implicit method 
 requires nonlinear solves, which are computationally expensive. To deal 
 with these restrictions, many approaches have been developed for solving 
 stiff equations. One of these approaches is implicit-explicit Runge-Kutta 
@@ -78,12 +78,12 @@ n(\CFKU),\] where $s(\CFKU)$ contains the stiff part of the equation, and
 $n(\CFKU)$ contains the nonstiff part. IMEX RK methods use an implicit RK 
 method on $s(\CFKU)$, and an explicit RK method to integrate $n(\CFKU)$. 
 These IMEX RK methods are implemented in HOMME-NH with a horizontally 
-explicit vertically implicit (HEVI) partitioning \cite{CFK:Steyer2019},
-\cite{CFK:Vogl2019}.
+explicit vertically implicit (HEVI) partitioning (\cite{CFK:Steyer2019}, 
+\cite{CFK:Vogl2019}).
 
 In this paper, we consider a class of exponential integrators, namely 
-integrating factor Runge-Kutta (IFRK) methods, as an alternative solver for 
-HOMME-NH with a horizontally explicit vertically integrating factor 
+integrating factor Runge-Kutta (IFRK) methods, as an alternative integrator 
+for HOMME-NH with a horizontally explicit vertically integrating factor 
 exponential (HEVIE) partitioning. With IFRK methods, we split our equation 
 as \[ \CFKU_t = f(\CFKU) = L_m\CFKU +  N_m(\CFKU),\] where $L_m$ is a 
 linear operator containing the stiff part of the equation, and $N_m(\CFKU) 
@@ -91,7 +91,7 @@ linear operator containing the stiff part of the equation, and $N_m(\CFKU)
 but we do not assume this is the case. Using the change of variables 
 $\CFKV(t) = e^{-L_m(t-t_m)}\CFKU(t)$, we have \begin{equation}
 \label{CFK:eqn:vode}
-\CFKV_t = e^{-L_m(t-t_m)}N(e^{L_m(t-t_m)}\CFKV). \end{equation} 
+\CFKV_t = e^{-L_m(t-t_m)}N_m(e^{L_m(t-t_m)}\CFKV). \end{equation} 
 We then use a fully explicit $r-$stage RK method to solve equation 
 \ref{CFK:eqn:vode}, as explained in Section \ref{CFK:sec:ifrk}.
 
@@ -115,11 +115,11 @@ methods, a major drawback is the computational cost of forming the matrix
 exponential. For this reason, matrix exponential methods were seldom used 
 in practice, but advances in efficiently forming $e^A$ have recently made 
 exponential-type methods a competetive choice for integrating stiff initial 
-value problems (\cite{CFK:Garcia2014}, \cite{CFK:Clancy2013}).
+value problems (e.g., \cite{CFK:Clancy2013}, \cite{CFK:Garcia2014}).
 
 The matrix exponential $e^A$ can be analytically computed if the matrix $A$ 
 is diagonalizable, but finding the eigenvalues of $A$ is expensive, and it 
-is not generally guaranteed that $A$ is diagonalizable. A more popular 
+is not generally guaranteed that $A$ is diagonalizable. A more efficient 
 approach is to approximate $e^{A}$ using a Pad\'e or Taylor series 
 approximation. Other methods of approximating the matrix exponential are 
 discussed in \cite{CFK:Moler2003}.
@@ -149,8 +149,9 @@ the error, as shown in Table \ref{CFK:tab:PadeError}. If the matrix $A$ is
 ill-conditioned, the Pad\'e  approximation can be especially inaccuarate. 
 To mitigate this problem, we implement a scaling and squaring approach. We 
 briefly outline this procedure here; for further detail and error analysis 
-of the scaling and squaring method, see \cite{CFK:higham2005} and 
-\cite{CFK:Al-Mohy2009}. 
+of the scaling and squaring method, see \cite{CFK:Al-Mohy2009} and 
+\cite{CFK:higham2005}.
+
 
 To scale $e^A$, we take advantage of the properties of matrix exponentials 
 and write it as
@@ -186,7 +187,8 @@ nonhydrostatic atmosphere model whose state variables are listed in Table
       $\theta$                      & Potential temperature                                   \\
       $\pi$                         & Hydrostatic pressure                                    \\
       $\eta$                        & Mass-based hybrid terrain-following vertical coordinate \\
-      $\mu$                         &                        \\
+      $p_{nh}$                      & Nonhydrostatic pressure                                 \\
+      $\mu$                         & $\frac{\partial p_{nh}}{\partial\eta}/\frac{\partial\pi}{\partial\eta}$  \\
       \hline
     \end{tabular}
   \end{center}
@@ -254,7 +256,7 @@ $\left[\sigma_1I-A\right] =
  -\CFKg\Delta t I            & \sigma_1 I \end{bmatrix}.$ This form allows 
 us to solve for $R_1$ using far fewer operations than if 
 $\left[\sigma_1I-A\right]$ were a full matrix. To do this, we similarly 
-decompose $R_1$ and $\frac{1}{\kappa}P_{pq}(A)$ into block matrices:
+partition $R_1$ and $\frac{1}{\kappa}P_{pq}(A)$ into block matrices:
 \[ R_1 = \begin{bmatrix} \hat{R_1} \\ \hat{R_2}\end{bmatrix} \qquad P_{pq}(A) = \begin{bmatrix} \hat{P_1} \\ \hat{P_2}\end{bmatrix}.\]
 Then equation \ref{CFK:eqn:PadeApprox} becomes
 \[\begin{bmatrix} \sigma_1 I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
@@ -323,8 +325,8 @@ e^A &= V \exp\left(\begin{bmatrix} \lambda_1 &           &        &           \\
                                    &             & \ddots &             \\
                                    &             &        & e^\lambda_k \end{bmatrix} V^{-1}.
 \end{align*}
-The following table gives the error of several diagonal $(p,q)$-Pad\'e approximations, for 
-different values of $p=q$.
+Table \ref{CFK:tab:PadeError} gives the error of several diagonal $(p,q)$-
+Pad\'e approximations, for different values of $p=q$.
 \begin{table}[ht]
   \begin{center}
     \caption{Error of Pad\'e approximation as compared to analytic 
@@ -615,7 +617,7 @@ the matrix exponential.
 \scalebox{0.15}{\includegraphics{plots/CFKv_err_rel.png}}
 \end{tabular}
 \end{center}
-\caption{Errors with exponential integrating factor methods.}
+\caption{Log-log plot of errors of IFRK methods.}
 \end{figure}
 \newpage
 \begin{figure}[ht]
@@ -631,7 +633,7 @@ the matrix exponential.
 \scalebox{0.15}{\includegraphics{plots/CFKphi_err_rel.png}}
 \end{tabular}
 \end{center}
-\caption{Errors with exponential integrating factor methods, continued.}
+\caption{Log-log plot of errors of IFRK methods, continued.}
 \end{figure}
 
 \section{Conclusions}
