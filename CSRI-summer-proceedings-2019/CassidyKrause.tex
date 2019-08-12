@@ -17,6 +17,8 @@
 \newcommand{\CFKU}{\mathcal{U}}
 \newcommand{\CFKV}{\mathcal{V}}
 
+\newcommand{\A}[1]{\textbf{ANDREW:}\textit{#1}}
+
 % This controls the table-of-contents entry in the proceedings. Edit it
 % to include your article title followed by the authors' names, as shown.
 \addcontentsline{toc}{chapter}{Exponential Integrators for the HOMME-NH
@@ -46,7 +48,7 @@ Nonhydrostatic Atmosphere Model\\
 % Include your abstract here.
 \begin{abstract}
 Time-stepping in the HOMME-NH nonhydrostatic atmosphere model requires 
-integration of a stiff initial value problem. The current standard is to 
+integration of a stiff initial value problem. The current standard \A{This is not the current standard, better to phrase that exponential integrator are an alternative to implicit or IMEX} is to 
 solve these equations using implicit-explicit Runge-Kutta (IMEX RK) 
 methods with a horizontally explicit vertically implicit (HEVI) 
 partitioning. We introduce a horizontally explicit vertically integrating 
@@ -60,6 +62,7 @@ attractive option for HOMME-NH.
 \end{abstract}
 
 \section{Introduction} \label{CFK:sec:intro}
+\A{This paragraph is a little clunky; should rewrite in a better way.  The intro should clearly state the scientific or mathematical problem and our proposed approach for its resolution.}
 Stiff initial value problems, like those found in the HOMME-NH 
 nonhydrostatic atmosphere model, require a small step-size when integrated 
 with an explicit method. (For a thorough description of HOMME-NH, see 
@@ -73,19 +76,20 @@ integrators, which we consider in this paper as an alternative to IMEX RK
 methods for HOMME-NH. We briefly introduce these two types of methods 
 below.
 
-Consider an equation of the form \[ \CFKU_t = f(\CFKU) = s(\CFKU) + 
+\A{Change the upper case mathcal U to something more readable}
+Consider \A{an additively partitioned differential equation} an equation of the form \[ \CFKU_t = f(\CFKU) = s(\CFKU) + 
 n(\CFKU),\] where $s(\CFKU)$ contains the stiff part of the equation, and 
-$n(\CFKU)$ contains the nonstiff part. IMEX RK methods use an implicit RK 
-method on $s(\CFKU)$, and an explicit RK method to integrate $n(\CFKU)$. 
+$n(\CFKU)$ contains the nonstiff part \A{please define the subscript t as the derivative WRT time and state what domain u lives in, etc.  It would also be good to say we care solving an initial value problem}. IMEX RK methods use an implicit RK 
+method on $s(\CFKU)$, and an explicit RK method to integrate $n(\CFKU)$ \A{How about:  IMEX methods are partitioned methods for approximating IVPs of additively partitioned differential equations that treat the stiff terms implicitly and the nonstiff terms explicitly}. \A{How about:  The implementation and performance of various IMEX RK methods for integration of HOMME-NH with a HEVI partitioning are discussed in \cite{CFK:Steyer2019}}
 These IMEX RK methods are implemented in HOMME-NH with a horizontally 
 explicit vertically implicit (HEVI) partitioning (\cite{CFK:Steyer2019}, 
 \cite{CFK:Vogl2019}).
 
 In this paper, we consider a class of exponential integrators, namely 
-integrating factor Runge-Kutta (IFRK) methods, as an alternative integrator 
+integrating factor Runge-Kutta (IFRK) methods \A{Add citation}, as an alternative integrator 
 for HOMME-NH with a horizontally explicit vertically integrating factor 
 exponential (HEVIE) partitioning. With IFRK methods, we split our equation 
-as \[ \CFKU_t = f(\CFKU) = L_m\CFKU +  N_m(\CFKU),\] where $L_m$ is a 
+as \A{Add some stuff saying we linearize along an approximate solution trajectory $u_m \approx u(t_m)$} \[ \CFKU_t = f(\CFKU) = L_m\CFKU +  N_m(\CFKU),\] where $L_m$ is a 
 linear operator containing the stiff part of the equation, and $N_m(\CFKU) 
 = f(\CFKU)-L_m\CFKU$ contains the nonstiff terms. Often, $L_m = f'(\CFKU)$, 
 but we do not assume this is the case. Using the change of variables 
@@ -95,10 +99,10 @@ $\CFKV(t) = e^{-L_m(t-t_m)}\CFKU(t)$, we have \begin{equation}
 We then use a fully explicit $r-$stage RK method to solve equation 
 \ref{CFK:eqn:vode}, as explained in Section \ref{CFK:sec:ifrk}.
 
-The most expensive part of any exponential-type integrator, including IFRK 
+The most expensive part \A{Instead of ``The most expensive...'': A challenging component of many...} of any exponential-type integrator, including IFRK 
 methods, is the formation of the matrix exponential. However, the structure 
 of the Jacobian in HOMME-NH allows us to form these matrix exponentials 
-quickly and in parallel, making this a viable alternative to the IMEX 
+quickly and in parallel \A{In parallel over the horizontal mesh}, making this a viable alternative to the IMEX 
 RK methods.
 
 The rest of the paper is structured as follows: In Section 
@@ -110,13 +114,16 @@ results are given in Section \ref{CFK:sec:results}.
 
 \section{Numerical Approximation of the Matrix Exponential}
 \label{CFK:sec:matexp} 
-While exponential integrators allow for a larger time step than explicit 
+\A{This paragraph is great, but it sounds more like it should go in the introduction} While exponential integrators allow for a larger time step than explicit 
 methods, a major drawback is the computational cost of forming the matrix 
 exponential. For this reason, matrix exponential methods were seldom used 
 in practice, but advances in efficiently forming $e^A$ have recently made 
 exponential-type methods a competetive choice for integrating stiff initial 
 value problems (e.g., \cite{CFK:Clancy2013}, \cite{CFK:Garcia2014}).
 
+\A{Define the matrix exponential before its symbol is used.}
+
+\A{If the eigenvalues and eigenvectors of $A$ are known, then $e^A$ can be formed analytically}.
 The matrix exponential $e^A$ can be analytically computed if the matrix $A$ 
 is diagonalizable, but finding the eigenvalues of $A$ is expensive, and it 
 is not generally guaranteed that $A$ is diagonalizable. A more efficient 
@@ -137,7 +144,7 @@ Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j
 
 After we calculate the terms $P_{pq}$ and $Q_{pq}$, the product 
 $e^A\approx\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ is a potentially expensive 
-computation because of the matrix inversion. Fortunately, for our 
+computation because of the matrix inversion \A{and matrix products}. Fortunately, for our 
 application, the matrix $A$ we consider has a special structure that allows 
 us to approximate $e^A$ efficiently and accurately. This implementation is 
 further discussed in Section \ref{CFK:sec:homme}.
@@ -193,8 +200,10 @@ nonhydrostatic atmosphere model whose state variables are listed in Table
     \end{tabular}
   \end{center}
 \end{table}
-The stiff terms in this model are 
-$w$ and $\phi$, so we can write the governing equations as
+The governing equations can be decomposed into non-stiff and stiff terms as follows \cite{CFK:Steyer2019}:
+
+
+
 \[ \CFKU_t \coloneqq \begin{bmatrix} \vec{u_t} \\
 w_t\\
 \phi_t\\
@@ -211,24 +220,25 @@ w_t\\
 Linearizing $s(\CFKU)$ gives the following Jacobian:
 \[ J = \begin{bmatrix}
 0&                  &                                                   &  & \\
- & 0                & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} &  & \\
- & \CFKg \Delta t I & 0                                                 &  & \\
+ & 0                & \CFKg \frac{\partial \mu}{\partial \phi} &  & \\
+ & \CFKg  I & 0                                                 &  & \\
  &                  &                                                   &0 & \\
  &                  &                                                   &  &0\end{bmatrix},\]
 
 where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. Then
-\[ e^J = \begin{bmatrix}
+\[ e^{\alpha J} = \begin{bmatrix}
 I&                                                                     &  & \\
- & \exp\left(\begin{bmatrix}0 & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} \\ 
-  \CFKg \Delta t I & 0     \end{bmatrix}\right)     &  & \\                                      
+ & \exp\left(\begin{bmatrix}0 & \CFKg \alpha \frac{\partial \mu}{\partial \phi} \\ 
+  \CFKg \alpha I & 0     \end{bmatrix}\right)     &  & \\                                      
  &                                                                     &I & \\
- &                                                                     &  &I\end{bmatrix}.\]
+ &                                                                     &  &I\end{bmatrix}, \quad \alpha \neq 0.\]
 
-So, forming $e^{\alpha J}$ reduces to forming an exponential of the 
+\A{Need to find a way of incorporating $\alpha$ with $A$; please note that $\Delta t$ is not part of the defintion of $s(\mathcal{U})$.}
+So, forming $e^{\alpha J}$ for $\alpha \neq 0$ reduces to forming an exponential of the 
 tridiagonal-like matrix $A \coloneqq 
 \begin{bmatrix}
-   0              & \CFKg \Delta t \frac{\partial \mu}{\partial \phi} \\
- \CFKg \Delta t I & 0  \end{bmatrix}$, and the matrix exponential will 
+   0              & \CFKg \alpha \frac{\partial \mu}{\partial \phi} \\
+ \CFKg \alpha t I & 0  \end{bmatrix}$, and the matrix exponential will 
 only act on variables $w$ and $\phi$. 
 
 The structure of $A$ allows us to solve 
@@ -238,12 +248,10 @@ and back substitution. To do so, we first factor $Q_{pq}(A)$ as
 Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j\\
           &= \kappa\prod_{j=1}^q\left[\sigma_jI-A\right],
 \end{align*}
-where $\sigma_j\in \mathbb{C}$ for $j=1,\dots,q$.
-
-Then, since we want to solve for 
+where $\sigma_j\in \mathbb{C}$ for $j=1,\dots,q$.  Then, since we want to solve for 
 $R \coloneqq \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, we have
 \begin{align*}
-Q_{pq}(A) R &= P_{pq}(A)\\
+% Q_{pq}(A) R &= P_{pq}(A)\\
 \prod_{j=1}^q\left[\sigma_jI-A\right]R &= \frac{1}{\kappa}P_{pq}(A).
 \end{align*}
 
@@ -291,8 +299,7 @@ On the other hand, we also have
 \[\left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R = R_1.\] 
 We can iteratively repeat the same procedure, defining 
 \[R_j \coloneqq \left[\sigma_{j+1}I-A\right]\left[\sigma_{j+2}I-A\right]\cdots\left[\sigma_qI-A\right]R\]
- and solving 
-\[\left[\sigma_jI-A\right]R_j = R_{j-1}\] for $R_j$, continuing 
+ and solving $\sigma_jI-A\right]R_j = R_{j-1}$ for $R_j$.  Continuing 
 in this way until we arrive at \[\left[\sigma_qI-A\right]R = R_{q-1}.\] 
 Solving this last tridiagonal system gives us the $R = \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)\approx e^A$
  that we are looking for.
@@ -354,7 +361,7 @@ approximation we choose to implement in our IFRK methods.
 The focus of this paper is to implement IFRK methods in the HOMME-NH 
 nonhydrostatic atmosphere model. IFRK methods were introduced in 
 \cite{CFK:Lawson1969}, shown to be a type of exponential RK method by
-\cite{CFK:Minchev2006}, and proven to be strong stability preserving (SSP) 
+\cite{CFK:Minchev2006}, and \A{Not quite, I they are SSP if the underlying RK method is SSP} proven to be strong stability preserving (SSP) 
 by \cite{CFK:Isherwood2018}.
 
 For IFRK methods, we use an explicit $r$-stage RK method to solve 
@@ -370,7 +377,7 @@ for $j = 1,\dots,r$, where $t_{m,k} = t_m + c_k \Delta t$.
 The naming convention we use for the explicit $r$-stage RK methods is ``$ERK
 -nm$,'' where $n$ is the order of the method, and $m$ is the number of
 stages. Here, we consider four explicit RK methods, given by the Butcher 
-tableaux below.
+tableaux \A{Good use of the French plural} below.
 \begin{align*}&\text{ERK-}13:
  \begin{array}{c|ccc}
 0   & 0   & 0 & 0\\
@@ -415,7 +422,7 @@ tableaux below.
 After implementing each of the methods described in Section 
 \ref{CFK:sec:ifrk} into HOMME-NH, we tested their convergence. For the 
 ``truth'', we compared our exponential integrating factor methods to a 
-third order, five stage Ullrich method (described in \cite{CFK:Guerra2016}) 
+third order, five stage Ullrich method (\A{I am really picky about this: can you give the correct page or equation number where it is defined in this reference} described in \cite{CFK:Guerra2016}) 
 with a timestep of $10^{-5}$, calculating the maximum $2$-norm error over 
 all latitudes and longitudes. To verify our methods, we calculate the error 
 of the stiff variables, $w$ and $\phi$, which the matrix exponential acts 
@@ -602,7 +609,7 @@ $w$ is larger than that of the other variables.
 We graph these errors in Figure \ref{CFK:fig:convtest}. The slope of these 
 methods flattens out as the timestep goes to zero. One possible 
 explanation for this is that the accuracy may be limited by the accuracy of 
-the matrix exponential.
+the matrix exponential \A{Also could be accuracy of the ''truth''}.
 
 \begin{figure}[ht]
 \label{CFK:fig:convtest}
