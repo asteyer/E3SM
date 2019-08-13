@@ -981,6 +981,33 @@ contains
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
 
 !!==========================================================================================================
+!!==========================================================================================================
+    elseif (tstep_type == 20) then ! First order ETD Method
+
+      ! Compute JacL, JacD, and JacU
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+
+      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete) ! move to np1
+      ! Compute N(u_m)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,0.d0)
+      call phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,.false.,dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
+
+      
+
+!!==========================================================================================================
+
  !==========================================================================================================
     else
       call abortmp('ERROR: bad choice of tstep_type')
@@ -3252,6 +3279,68 @@ contains
   end if
 
   end subroutine matrix_exponential2
+
+subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
+  real (kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),JacU_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1)
+  type (element_t), intent(inout), target :: elem(:)
+  integer, intent(in) :: n0,nets,nete
+  real (kind=real_kind), intent(in) :: dt
+  logical, intent(in) :: neg
+
+  ! Local variables
+  integer :: ie,i,j,info,k
+  real (kind=real_kind) :: wphivec(2*nlev)
+  real (kind=real_kind) :: expJ(2*nlev,2*nlev),Jac(2*nlev,2*nlev),iden(2*nlev,2*nlev) 
+  real (kind=real_kind) :: work(2*nlev)
+  integer :: ipiv(2*nlev)
+
+  iden = 0.d0
+  do i = 1,2*nlev
+    iden(i,i) = 1.d0 
+  end do
+
+  do ie = nets, nete
+    do i = 1,np
+      do j = 1,np
+        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),neg,nlev,dt,expJ)
+        expJ = expJ - iden
+
+        Jac = 0.d0
+        do k = 1,nlev-1
+          Jac(k,k+nlev) = JacD_elem(k,i,j,ie)
+          Jac(k+1,k+nlev) = JacL_elem(k,i,j,ie)
+          Jac(k,k+nlev+1) = JacU_elem(k,i,j,ie)
+
+          Jac(k+nlev,k) = 1.d0
+        end do
+        Jac(nlev,2*nlev) = JacD_elem(nlev,i,j,ie)
+        Jac(2*nlev,nlev) = 1.d0
+        Jac = Jac * g
+
+        work = 0.d0
+        ipiv = 0
+        call DGETRF(2*nlev, 2*nlev, Jac, 2*nlev, ipiv, info)
+        if (info .ne. 0) then
+          print *, "error 1!"
+        end if
+        call DGETRI(2*nlev, Jac, 2*nlev, ipiv, work, 2*nlev, info)
+        if (info .ne. 0) then
+          print *, "error 2!"
+        end if
+        expJ = matmul(Jac, expJ)
+       
+        wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+        wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
+        wphivec = matmul(expJ,wphivec)
+       
+        elem(ie)%state%w_i(i,j,1:nlev,n0) = wphivec(1:nlev)
+        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = wphivec(1+nlev:2*nlev)
+
+      end do
+    end do
+  end do
+
+  end subroutine phi1Ldt
 
 !=========================================================================
 ! Stores elem(np1) in mdarray "stage"
