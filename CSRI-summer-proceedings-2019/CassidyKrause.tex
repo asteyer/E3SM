@@ -14,8 +14,6 @@
 \newcommand{\SSSnorm}[1]{\left\Vert#1\right\Vert}
 \newcommand{\SSSabs}[1]{\left\vert#1\right\vert}
 \newcommand{\CFKg}{\mathfrak{g}}
-\newcommand{\CFKU}{\mathcal{U}}
-\newcommand{\CFKV}{\mathcal{V}}
 
 \newcommand{\A}[1]{\textbf{ANDREW:}\textit{#1}}
 
@@ -32,7 +30,8 @@ Nonhydrostatic Atmosphere Model\\
 % This gives the running head. Usually you list a shortened version of
 % your article title (unless it's already very short) along with
 % the author's names, as shown.
-\markboth{Exponential Integrators for HOMME-NH}{C.F.\ Krause and A.J.\ Steyer}
+\markboth{Exponential Integrators for HOMME-NH}{C.F.\ Krause and 
+ A.J.\ Steyer}
 
 % Put your article title in here
 \title{Exponential Integrators for the HOMME-NH Nonhydrostatic Atmosphere
@@ -40,7 +39,8 @@ Nonhydrostatic Atmosphere Model\\
 
 % List each author, their affiliation, and their e-mail address, as shown.
 \author{Cassidy F.\ Krause\thanks{University of Kansas, ckrause@ku.edu}
-\and Andrew J.\ Steyer\thanks{Sandia National Laboratories, asteyer@sandia.gov}}
+\and Andrew J.\ Steyer\thanks{Sandia National Laboratories, 
+  asteyer@sandia.gov}}
 
 \begin{document}
 \maketitle
@@ -48,62 +48,71 @@ Nonhydrostatic Atmosphere Model\\
 % Include your abstract here.
 \begin{abstract}
 Time-stepping in the HOMME-NH nonhydrostatic atmosphere model requires 
-integration of a stiff initial value problem. The current standard \A{This is not the current standard, better to phrase that exponential integrator are an alternative to implicit or IMEX} is to 
-solve these equations using implicit-explicit Runge-Kutta (IMEX RK) 
-methods with a horizontally explicit vertically implicit (HEVI) 
-partitioning. We introduce a horizontally explicit vertically integrating 
-factor exponential (HEVIE) method as an alternative to solving 
-these stiff equations. The benefit of exponential methods is that they 
-allow a larger step-size than explicit methods; however, their main 
-drawback is the cost of forming the matrix exponential. Here, we show that 
-we can mitigate this cost by taking advantage of the tridiagonal-like form 
-of our Jacobian and parallelizing our computations, making this solver an 
-attractive option for HOMME-NH.
+integration of a stiff initial value problem. The current implementation in 
+HOMME-NH uses implicit-explicit Runge-Kutta (IMEX RK) methods with a 
+horizontally explicit vertically implicit (HEVI) partitioning. We introduce 
+a horizontally explicit vertically integrating factor exponential (HEVIE) 
+method as an alternative to solving these stiff equations. The benefit of 
+exponential methods is that they allow a larger step-size than explicit 
+methods; however, their main drawback is the cost of forming the matrix 
+exponential. Here, we show that we can mitigate this cost by taking 
+advantage of the tridiagonal-like form of our Jacobian and parallelizing 
+our computations, making this solver an attractive option for HOMME-NH.
 \end{abstract}
 
 \section{Introduction} \label{CFK:sec:intro}
-\A{This paragraph is a little clunky; should rewrite in a better way.  The intro should clearly state the scientific or mathematical problem and our proposed approach for its resolution.}
-Stiff initial value problems, like those found in the HOMME-NH 
-nonhydrostatic atmosphere model, require a small step-size when integrated 
-with an explicit method. (For a thorough description of HOMME-NH, see 
-\cite{CFK:preprint}.) On the other hand, using a fully implicit method 
-requires nonlinear solves, which are computationally expensive. To deal 
-with these restrictions, many approaches have been developed for solving 
-stiff equations. One of these approaches is implicit-explicit Runge-Kutta 
-(IMEX RK) methods, which are currently implemented in HOMME-NH. A second 
-approach to solving stiff initial value problems is exponential-type 
-integrators, which we consider in this paper as an alternative to IMEX RK 
-methods for HOMME-NH. We briefly introduce these two types of methods 
-below.
+Stiff initial value problems are a challenge for nonhydrostatic 
+atmosphere models like HOMME-NH, described in \cite{CFK:preprint}. Several 
+methods have been proposed to avoid the step-size restriction associated 
+with stiff problems, including implicit-explicit Runge-Kutta (IMEX RK) 
+methods, which are currently implemented in HOMME-NH. Here, we investigate 
+integrating factor Runge-Kutta (IFRK) methods, a class of exponential 
+integrators, as an alternative approach to dealing with the stiff initial 
+value problems in HOMME-NH.
 
-\A{Change the upper case mathcal U to something more readable}
-Consider \A{an additively partitioned differential equation} an equation of the form \[ \CFKU_t = f(\CFKU) = s(\CFKU) + 
-n(\CFKU),\] where $s(\CFKU)$ contains the stiff part of the equation, and 
-$n(\CFKU)$ contains the nonstiff part \A{please define the subscript t as the derivative WRT time and state what domain u lives in, etc.  It would also be good to say we care solving an initial value problem}. IMEX RK methods use an implicit RK 
-method on $s(\CFKU)$, and an explicit RK method to integrate $n(\CFKU)$ \A{How about:  IMEX methods are partitioned methods for approximating IVPs of additively partitioned differential equations that treat the stiff terms implicitly and the nonstiff terms explicitly}. \A{How about:  The implementation and performance of various IMEX RK methods for integration of HOMME-NH with a HEVI partitioning are discussed in \cite{CFK:Steyer2019}}
-These IMEX RK methods are implemented in HOMME-NH with a horizontally 
-explicit vertically implicit (HEVI) partitioning (\cite{CFK:Steyer2019}, 
-\cite{CFK:Vogl2019}).
+Consider an additively partitioned differential equation of the form 
+\begin{equation}\label{CFK:eqn:ode} 
+\omega_t = f(\omega) = s(\omega) + n(\omega),\end{equation} where 
+$\omega \in \mathbb{R}^n$, and $\omega_t$ denotes the derivative with 
+respect to time. With this partitioning, $s(\omega)$ contains the stiff 
+part of the equation, and $n(\omega)$ contains the nonstiff part. In 
+HOMME-NH, we wish to solve an initial value problem of the form 
+\ref{CFK:eqn:ode} with initial condition $\omega_0 = \omega(t_0)$. 
 
-In this paper, we consider a class of exponential integrators, namely 
-integrating factor Runge-Kutta (IFRK) methods \A{Add citation}, as an alternative integrator 
-for HOMME-NH with a horizontally explicit vertically integrating factor 
-exponential (HEVIE) partitioning. With IFRK methods, we split our equation 
-as \A{Add some stuff saying we linearize along an approximate solution trajectory $u_m \approx u(t_m)$} \[ \CFKU_t = f(\CFKU) = L_m\CFKU +  N_m(\CFKU),\] where $L_m$ is a 
-linear operator containing the stiff part of the equation, and $N_m(\CFKU) 
-= f(\CFKU)-L_m\CFKU$ contains the nonstiff terms. Often, $L_m = f'(\CFKU)$, 
-but we do not assume this is the case. Using the change of variables 
-$\CFKV(t) = e^{-L_m(t-t_m)}\CFKU(t)$, we have \begin{equation}
+IMEX methods are partitioned methods for approximating initial value 
+problems of additively partitioned differential equations that treat the 
+stiff terms implicitly and the nonstiff terms explicitly. The 
+implementation and performance of various IMEX RK methods for integration 
+of HOMME-NH with a horizontally explicit vertically implicit (HEVI) 
+partitioning are discussed in \cite{CFK:Steyer2019}.
+
+In this paper, we consider IFRK methods (\cite{CFK:Minchev2006}) as 
+an alternative integrator for HOMME-NH with a horizontally explicit 
+vertically integrating factor exponential (HEVIE) partitioning. Given an 
+approximate solution trajectory $\omega_m \approx \omega(t_m)$, we define a 
+new additive partitioning of \ref{CFK:eqn:ode} by linearizing the stiff 
+part, $s(\omega)$, along $\omega_m$. Let $L_m=\frac{\partial s}{\partial
+{\omega}}(\omega_m)$, and set $N_m(\omega) = f(\omega) - L_m \omega$. With 
+IFRK methods, we split our equation as \[ \omega_t = f(\omega) = 
+L_m\omega +  N_m(\omega).\] With this partitioning, $L_m$ is a  linear 
+operator containing the stiff part of the equation, and $N_m(\omega)$ 
+contains the nonstiff terms. Often, $L_m = f'(\omega)$, but we do not 
+assume this is the case. Using the change of variables $\nu(t)=e^{-L_m
+(t-t_m)}\omega(t)$, we have \begin{equation}
 \label{CFK:eqn:vode}
-\CFKV_t = e^{-L_m(t-t_m)}N_m(e^{L_m(t-t_m)}\CFKV). \end{equation} 
+\nu_t = e^{-L_m(t-t_m)}N_m(e^{L_m(t-t_m)}\nu). \end{equation} 
 We then use a fully explicit $r-$stage RK method to solve equation 
 \ref{CFK:eqn:vode}, as explained in Section \ref{CFK:sec:ifrk}.
 
-The most expensive part \A{Instead of ``The most expensive...'': A challenging component of many...} of any exponential-type integrator, including IFRK 
-methods, is the formation of the matrix exponential. However, the structure 
-of the Jacobian in HOMME-NH allows us to form these matrix exponentials 
-quickly and in parallel \A{In parallel over the horizontal mesh}, making this a viable alternative to the IMEX 
-RK methods.
+While exponential integrators allow for a larger time step than explicit 
+methods, a major drawback is the computational cost of forming the matrix 
+exponential. For this reason, matrix exponential methods were seldom used 
+in practice, but advances in efficiently forming $e^A$ have recently made 
+exponential-type methods a competitive choice for integrating stiff initial 
+value problems (e.g., \cite{CFK:Clancy2013}, \cite{CFK:Garcia2014}). 
+Furthermore, the structure of the Jacobian in HOMME-NH allows us to form 
+these matrix exponentials quickly and in parallel over the horizontal mesh, 
+making this a viable alternative to the IMEX RK methods.
 
 The rest of the paper is structured as follows: In Section 
 \ref{CFK:sec:matexp} we give a brief background of numerical approximations 
@@ -114,22 +123,14 @@ results are given in Section \ref{CFK:sec:results}.
 
 \section{Numerical Approximation of the Matrix Exponential}
 \label{CFK:sec:matexp} 
-\A{This paragraph is great, but it sounds more like it should go in the introduction} While exponential integrators allow for a larger time step than explicit 
-methods, a major drawback is the computational cost of forming the matrix 
-exponential. For this reason, matrix exponential methods were seldom used 
-in practice, but advances in efficiently forming $e^A$ have recently made 
-exponential-type methods a competetive choice for integrating stiff initial 
-value problems (e.g., \cite{CFK:Clancy2013}, \cite{CFK:Garcia2014}).
-
-\A{Define the matrix exponential before its symbol is used.}
-
-\A{If the eigenvalues and eigenvectors of $A$ are known, then $e^A$ can be formed analytically}.
-The matrix exponential $e^A$ can be analytically computed if the matrix $A$ 
-is diagonalizable, but finding the eigenvalues of $A$ is expensive, and it 
-is not generally guaranteed that $A$ is diagonalizable. A more efficient 
-approach is to approximate $e^{A}$ using a Pad\'e or Taylor series 
-approximation. Other methods of approximating the matrix exponential are 
-discussed in \cite{CFK:Moler2003}.
+The matrix exponential is defined by the power series 
+\[ e^A = \sum_{j=0}^\infty \frac{1}{j!}A^j.\]
+If the eigenvalues and eigenvectors of $A$ are known, then $e^A$ can be 
+formed analytically. However, finding the eigenvalues of $A$ is expensive, 
+and it is not generally guaranteed that $A$ is diagonalizable. A more 
+efficient approach is to approximate $e^{A}$ using a Pad\'e or Taylor 
+series approximation. Other methods of approximating the matrix exponential 
+are discussed in \cite{CFK:Moler2003}.
 
 We choose to implement a $(p,q)$-Pad\'e approximation 
 $e^{A}\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, where $P_{pq}(A)$ and 
@@ -144,16 +145,16 @@ Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j
 
 After we calculate the terms $P_{pq}$ and $Q_{pq}$, the product 
 $e^A\approx\left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$ is a potentially expensive 
-computation because of the matrix inversion \A{and matrix products}. Fortunately, for our 
-application, the matrix $A$ we consider has a special structure that allows 
-us to approximate $e^A$ efficiently and accurately. This implementation is 
-further discussed in Section \ref{CFK:sec:homme}.
+computation because of the matrix inversion and matrix products. 
+Fortunately, for our application, the matrix $A$ we consider has a special 
+structure that allows us to approximate $e^A$ efficiently and accurately. 
+This implementation is further discussed in Section \ref{CFK:sec:homme}.
 
 The error for the $(p,q)$-Pad\'e approximation is given by
 \[e^A-\left[Q_{pq}(A)\right]^{-1}P_{pq}(A) = \mathcal{O}(\|A\|^{p+q+1}),\] 
 though in practice, this may be a particularly pessimistic estimation of 
 the error, as shown in Table \ref{CFK:tab:PadeError}. If the matrix $A$ is 
-ill-conditioned, the Pad\'e  approximation can be especially inaccuarate. 
+ill-conditioned, the Pad\'e  approximation can be especially inaccurate. 
 To mitigate this problem, we implement a scaling and squaring approach. We 
 briefly outline this procedure here; for further detail and error analysis 
 of the scaling and squaring method, see \cite{CFK:Al-Mohy2009} and 
@@ -204,28 +205,31 @@ The governing equations can be decomposed into non-stiff and stiff terms as foll
 
 
 
-\[ \CFKU_t \coloneqq \begin{bmatrix} \vec{u_t} \\
+\[ \omega_t \coloneqq \begin{bmatrix} \vec{u_t} \\
 w_t\\
 \phi_t\\
 \theta_t\\
 \frac{\partial \pi}{\partial \eta}
-\end{bmatrix} = n(\CFKU) + s(\CFKU),\text{ with }
- s(\CFKU) = \begin{bmatrix}
+\end{bmatrix} = n(\omega) + s(\omega),\text{ with }
+ s(\omega) = \begin{bmatrix}
 0\\
 -\CFKg (1-\mu)\\
 \CFKg w\\
 0\\
 0\end{bmatrix}.\]
 
-Linearizing $s(\CFKU)$ gives the following Jacobian:
-\[ J = \begin{bmatrix}
+Linearizing $s(\omega)$ gives the following Jacobian:
+\begin{equation}\label{CFK:eqn:Jacobian} J = \begin{bmatrix}
 0&                  &                                                   &  & \\
  & 0                & \CFKg \frac{\partial \mu}{\partial \phi} &  & \\
  & \CFKg  I & 0                                                 &  & \\
  &                  &                                                   &0 & \\
- &                  &                                                   &  &0\end{bmatrix},\]
+ &                  &                                                   &  &0\end{bmatrix},\end{equation}
 
-where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. Then
+where $\dfrac{\partial \mu}{\partial \phi}$ is tridiagonal. As explained 
+in Section \ref{CFK:sec:ifrk}, IFRK methods require the formation of the 
+matrix exponential $e^{\alpha J}$. Since $J$ has the form given in 
+\ref{CFK:eqn:Jacobian}, the matrix exponential will have the form
 \[ e^{\alpha J} = \begin{bmatrix}
 I&                                                                     &  & \\
  & \exp\left(\begin{bmatrix}0 & \CFKg \alpha \frac{\partial \mu}{\partial \phi} \\ 
@@ -233,12 +237,11 @@ I&                                                                     &  & \\
  &                                                                     &I & \\
  &                                                                     &  &I\end{bmatrix}, \quad \alpha \neq 0.\]
 
-\A{Need to find a way of incorporating $\alpha$ with $A$; please note that $\Delta t$ is not part of the defintion of $s(\mathcal{U})$.}
-So, forming $e^{\alpha J}$ for $\alpha \neq 0$ reduces to forming an exponential of the 
-tridiagonal-like matrix $A \coloneqq 
+So, forming $e^{\alpha J}$ for $\alpha \neq 0$ reduces to forming an 
+exponential of the tridiagonal-like matrix $A \coloneqq 
 \begin{bmatrix}
    0              & \CFKg \alpha \frac{\partial \mu}{\partial \phi} \\
- \CFKg \alpha t I & 0  \end{bmatrix}$, and the matrix exponential will 
+ \CFKg \alpha I & 0  \end{bmatrix}$, and the matrix exponential will 
 only act on variables $w$ and $\phi$. 
 
 The structure of $A$ allows us to solve 
@@ -248,8 +251,8 @@ and back substitution. To do so, we first factor $Q_{pq}(A)$ as
 Q_{pq}(A) &= \sum_{j=0}^q\frac{(p+q-j)!q!}{(p+q)!j!(q-j)!}(-A)^j\\
           &= \kappa\prod_{j=1}^q\left[\sigma_jI-A\right],
 \end{align*}
-where $\sigma_j\in \mathbb{C}$ for $j=1,\dots,q$.  Then, since we want to solve for 
-$R \coloneqq \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, we have
+where $\sigma_j\in \mathbb{C}$ for $j=1,\dots,q$. Since we want to solve 
+for $R \coloneqq \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, we write
 \begin{align*}
 % Q_{pq}(A) R &= P_{pq}(A)\\
 \prod_{j=1}^q\left[\sigma_jI-A\right]R &= \frac{1}{\kappa}P_{pq}(A).
@@ -258,48 +261,50 @@ $R \coloneqq \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, we have
 Define $R_1 \coloneqq \left[\sigma_2I-A\right]\left[\sigma_3I-A\right]
 \cdots\left[\sigma_qI-A\right]R$. Then our equation becomes
 \begin{equation}\label{CFK:eqn:PadeApprox} \left[\sigma_1I-A\right]R_1 
-= \frac{1}{\kappa}P_{pq}(A).\end{equation} Note that
+= \frac{1}{\kappa}P_{pq}(A).\end{equation} Note that 
 $\left[\sigma_1I-A\right] =
- \begin{bmatrix} \sigma_1 I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
- -\CFKg\Delta t I            & \sigma_1 I \end{bmatrix}.$ This form allows 
+ \begin{bmatrix} \sigma_1 I  & -\CFKg\alpha \frac{\partial\mu}{\partial\phi} \\
+ -\CFKg\alpha I            & \sigma_1 I \end{bmatrix}.$ This form allows 
 us to solve for $R_1$ using far fewer operations than if 
 $\left[\sigma_1I-A\right]$ were a full matrix. To do this, we similarly 
-partition $R_1$ and $\frac{1}{\kappa}P_{pq}(A)$ into block matrices:
-\[ R_1 = \begin{bmatrix} \hat{R_1} \\ \hat{R_2}\end{bmatrix} \qquad P_{pq}(A) = \begin{bmatrix} \hat{P_1} \\ \hat{P_2}\end{bmatrix}.\]
-Then equation \ref{CFK:eqn:PadeApprox} becomes
-\[\begin{bmatrix} \sigma_1 I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
-           -\CFKg\Delta t I & \sigma_1 I \end{bmatrix}
+partition $R_1$ and $\frac{1}{\kappa}P_{pq}(A)$ into block matrices: 
+\[ R_1 = \begin{bmatrix} \hat{R_1} \\ \hat{R_2}\end{bmatrix} \qquad P_{pq}(A)
+ = \begin{bmatrix} \hat{P_1} \\ \hat{P_2}\end{bmatrix}.\]
+Then equation \ref{CFK:eqn:PadeApprox} becomes 
+\[\begin{bmatrix} \sigma_1 I  & -\CFKg\alpha \frac{\partial\mu}{\partial\phi} \\
+           -\CFKg\alpha I & \sigma_1 I \end{bmatrix}
 \begin{bmatrix} \hat{R_1} \\
  \hat{R_2} \end{bmatrix} = 
 \begin{bmatrix} \hat{P_1} \\
  \hat{P_2} \end{bmatrix}.\]
 
-If $\sigma_1 = 0$ this decomposes to a tridiagonal linear solve and a trivial solve. 
-If $\sigma_1 \neq 0$, then we left multiply by $\begin{bmatrix} I & 0 \\
-                                     \CFKg\Delta t \sigma_1^{-1}I & I \end{bmatrix}$ to obtain:
+If $\sigma_1 = 0$ this decomposes to a tridiagonal linear solve and a 
+trivial solve. If $\sigma_1 \neq 0$, then we left multiply by 
+$\begin{bmatrix} I & 0 \\ \CFKg\alpha \sigma_1^{-1}I & I \end{bmatrix}$ 
+to obtain:
 \[\begin{bmatrix} 
- \sigma_1 I  & -\CFKg\Delta t \frac{\partial\mu}{\partial\phi} \\
-         0 & \sigma_1 I -\left(\CFKg\Delta t\right)^2  \sigma_1^{-1}\frac{\partial\mu}{\partial\phi}
+ \sigma_1 I  & -\CFKg\alpha \frac{\partial\mu}{\partial\phi} \\
+         0 & \sigma_1 I -\left(\CFKg\alpha\right)^2  \sigma_1^{-1}\frac{\partial\mu}{\partial\phi}
  \end{bmatrix}
  \begin{bmatrix} \hat{R_1} \\
  \hat{R_2} \end{bmatrix} = 
 \begin{bmatrix} \hat{P_1} \\
- \CFKg\Delta t \sigma_1^{-1} \hat{P_1} +  \hat{P_2} \end{bmatrix}.\]
-The matrix block $\left[\sigma_1 I -\left(\CFKg\Delta t\right)^2\sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]$ 
+ \CFKg\alpha \sigma_1^{-1} \hat{P_1} +  \hat{P_2} \end{bmatrix}.\]
+The matrix block $\left[\sigma_1 I -\left(\CFKg\alpha\right)^2\sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]$ 
 is tridiagonal since $\frac{\partial\mu}{\partial\phi}$ is tridiagonal. 
 Therefore we can solve for $\hat{R_2}$ with a tridiagonal 
 solve:
-\[\left[\sigma_1 I -\left(\CFKg\Delta t \right)^2  \sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]\hat{R_2}
- = \left[\CFKg\Delta t\sigma_1^{-1} \hat{P_1} +  \hat{P_2}\right],\]
+\[\left[\sigma_1 I -\left(\CFKg\alpha \right)^2  \sigma_1^{-1}\frac{\partial\mu}{\partial\phi}\right]\hat{R_2}
+ = \left[\CFKg\alpha\sigma_1^{-1} \hat{P_1} +  \hat{P_2}\right],\]
 and then form $\hat{R_1}$ as 
-\[\hat{R_1} = \sigma_1^{-1}\left[P_1 + \CFKg\Delta t\frac{\partial \mu}{\partial \phi}\right] \hat{R_2}.\]
+\[\hat{R_1} = \sigma_1^{-1}\left[P_1 + \CFKg\alpha\frac{\partial \mu}{\partial \phi}\right] \hat{R_2}.\]
 
 In this way, we have just solved equation \ref{CFK:eqn:PadeApprox} for $R_1 = \begin{bmatrix} \hat{R_1}\\ \hat{R_2}\end{bmatrix}$. 
 On the other hand, we also have
 \[\left[\sigma_2I-A\right]\left[\sigma_3I-A\right]\cdots\left[\sigma_qI-A\right]R = R_1.\] 
 We can iteratively repeat the same procedure, defining 
 \[R_j \coloneqq \left[\sigma_{j+1}I-A\right]\left[\sigma_{j+2}I-A\right]\cdots\left[\sigma_qI-A\right]R\]
- and solving $\sigma_jI-A\right]R_j = R_{j-1}$ for $R_j$.  Continuing 
+ and solving $\left[\sigma_jI-A\right]R_j = R_{j-1}$ for $R_j$, continuing 
 in this way until we arrive at \[\left[\sigma_qI-A\right]R = R_{q-1}.\] 
 Solving this last tridiagonal system gives us the $R = \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)\approx e^A$
  that we are looking for.
@@ -361,8 +366,8 @@ approximation we choose to implement in our IFRK methods.
 The focus of this paper is to implement IFRK methods in the HOMME-NH 
 nonhydrostatic atmosphere model. IFRK methods were introduced in 
 \cite{CFK:Lawson1969}, shown to be a type of exponential RK method by
-\cite{CFK:Minchev2006}, and \A{Not quite, I they are SSP if the underlying RK method is SSP} proven to be strong stability preserving (SSP) 
-by \cite{CFK:Isherwood2018}.
+\cite{CFK:Minchev2006}, and proven in \cite{CFK:Isherwood2018} to be 
+strong stability preserving (SSP) if the underlying RK method is SSP.
 
 For IFRK methods, we use an explicit $r$-stage RK method to solve 
 equation \ref{CFK:eqn:vode}. If the Butcher tableau is given by 
@@ -377,8 +382,8 @@ for $j = 1,\dots,r$, where $t_{m,k} = t_m + c_k \Delta t$.
 The naming convention we use for the explicit $r$-stage RK methods is ``$ERK
 -nm$,'' where $n$ is the order of the method, and $m$ is the number of
 stages. Here, we consider four explicit RK methods, given by the Butcher 
-tableaux \A{Good use of the French plural} below.
-\begin{align*}&\text{ERK-}13:
+tableaux below.
+\begin{align*}&\text{ERK-}12:
  \begin{array}{c|ccc}
 0   & 0   & 0 & 0\\
 1/2 & 1/2 & 0 & 0\\
@@ -386,7 +391,7 @@ tableaux \A{Good use of the French plural} below.
 \hline
     & 0   & 1 & 0
 \end{array}
-& \text{ERK-}36: 
+& \text{ERK-}35: 
 \begin{array}{c|cccccc}
 0   & 0   & 0   & 0   & 0   & 0   & 0\\
 1/5 & 1/5 & 0   & 0   & 0   & 0   & 0\\
@@ -398,7 +403,7 @@ tableaux \A{Good use of the French plural} below.
     & 1/4 & 0   & 0   & 0   & 3/4 & 0
 \end{array}\\
 \\
-&\text{ERK-}24: 
+&\text{ERK-}23: 
 \begin{array}{c|cccc}
 0   & 0   & 0   & 0 & 0\\
 1/2 & 1/2 & 0   & 0 & 0\\
@@ -407,7 +412,7 @@ tableaux \A{Good use of the French plural} below.
 \hline
     & 0   & 0   & 1 & 0
 \end{array}
-& \text{ERK-}44: 
+& \text{ERK-}43: 
 \begin{array}{c|cccc}
 0   & 0   & 0   & 0   & 0 \\
 1/2 & 1/2 & 0   & 0   & 0 \\
@@ -422,14 +427,14 @@ tableaux \A{Good use of the French plural} below.
 After implementing each of the methods described in Section 
 \ref{CFK:sec:ifrk} into HOMME-NH, we tested their convergence. For the 
 ``truth'', we compared our exponential integrating factor methods to a 
-third order, five stage Ullrich method (\A{I am really picky about this: can you give the correct page or equation number where it is defined in this reference} described in \cite{CFK:Guerra2016}) 
-with a timestep of $10^{-5}$, calculating the maximum $2$-norm error over 
-all latitudes and longitudes. To verify our methods, we calculate the error 
-of the stiff variables, $w$ and $\phi$, which the matrix exponential acts 
-upon. We also calculate the error of $u$ and $v$, which the matrix 
-exponential does not affect, as reference variables. The absolute errors 
-are listed in Table \ref{CFK:tab:abs_err}, and the relative errors are 
-listed in Table \ref{CFK:tab:rel_err}.
+third order, five stage Ullrich method (equation $56$ in 
+\cite{CFK:Guerra2016}) with a timestep of $10^{-7}$, calculating the 
+maximum $2$-norm error over all latitudes and longitudes. To verify our 
+methods, we calculate the error of the stiff variables, $w$ and $\phi$, 
+which the matrix exponential acts upon. We also calculate the error of $u$ 
+and $v$, which the matrix exponential does not affect, as reference 
+variables. The absolute errors are listed in Table \ref{CFK:tab:abs_err}, 
+and the relative errors are listed in Table \ref{CFK:tab:rel_err}.
 
 \begin{table}[ht]
   \centering
@@ -438,79 +443,79 @@ listed in Table \ref{CFK:tab:rel_err}.
   \scalebox{0.6}{\subtable[Absolute error of $u$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-13          & $0.1$             & $3.11$e-$4$ \\
-      ERK-13          & $0.01$            & $3.12$e-$6$ \\
-      ERK-13          & $0.001$           & $1.07$e-$6$ \\
+      ERK-12          & $0.1$             & $3.11$e-$4$ \\
+      ERK-12          & $0.01$            & $3.12$e-$6$ \\
+      ERK-12          & $0.001$           & $9.10$e-$8$ \\
       \hline
-      ERK-24          & $0.1$             & $2.84$e-$4$ \\
-      ERK-24          & $0.01$            & $2.83$e-$6$ \\
-      ERK-24          & $0.001$           & $1.07$e-$6$ \\
+      ERK-23          & $0.1$             & $2.84$e-$4$ \\
+      ERK-23          & $0.01$            & $2.83$e-$6$ \\
+      ERK-23          & $0.001$           & $9.10$e-$8$ \\
       \hline
-      ERK-36          & $0.1$             & $1.07$e-$6$ \\
-      ERK-36          & $0.01$            & $1.07$e-$6$ \\
-      ERK-36          & $0.001$           & $1.07$e-$6$ \\
+      ERK-35          & $0.1$             & $3.48$e-$7$ \\
+      ERK-35          & $0.01$            & $9.10$e-$8$ \\
+      ERK-35          & $0.001$           & $9.11$e-$8$ \\
       \hline
-      ERK-44          & $0.1$             & $1.07$e-$6$ \\
-      ERK-44          & $0.01$            & $1.07$e-$6$ \\
-      ERK-44          & $0.001$           & $1.07$e-$6$
+      ERK-43          & $0.1$             & $1.51$e-$7$ \\
+      ERK-43          & $0.01$            & $9.10$e-$8$ \\
+      ERK-43          & $0.001$           & $9.11$e-$8$
     \end{tabular}}}
   \quad
   \scalebox{0.6}{\subtable[Absolute error of $v$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-13          & $0.1$             & $3.22$e-$4$ \\
-      ERK-13          & $0.01$            & $3.22$e-$6$ \\
-      ERK-13          & $0.001$           & $6.52$e-$7$ \\
+      ERK-12          & $0.1$             & $3.22$e-$4$ \\
+      ERK-12          & $0.01$            & $3.22$e-$6$ \\
+      ERK-12          & $0.001$           & $7.07$e-$8$ \\
       \hline
-      ERK-24          & $0.1$             & $2.93$e-$4$ \\
-      ERK-24          & $0.01$            & $2.93$e-$6$ \\
-      ERK-24          & $0.001$           & $6.52$e-$7$ \\
+      ERK-23          & $0.1$             & $2.93$e-$4$ \\
+      ERK-23          & $0.01$            & $2.93$e-$6$ \\
+      ERK-23          & $0.001$           & $7.99$e-$8$ \\
       \hline
-      ERK-36          & $0.1$             & $6.55$e-$7$ \\
-      ERK-36          & $0.01$            & $6.52$e-$7$ \\
-      ERK-36          & $0.001$           & $6.52$e-$7$ \\
+      ERK-35          & $0.1$             & $3.55$e-$7$ \\
+      ERK-35          & $0.01$            & $7.05$e-$8$ \\
+      ERK-35          & $0.001$           & $7.00$e-$8$ \\
       \hline
-      ERK-44          & $0.1$             & $6.53$e-$7$ \\
-      ERK-44          & $0.01$            & $6.52$e-$7$ \\
-      ERK-44          & $0.001$           & $6.52$e-$7$
+      ERK-43          & $0.1$             & $1.56$e-$7$ \\
+      ERK-43          & $0.01$            & $7.05$e-$8$ \\
+      ERK-43          & $0.001$           & $7.00$e-$8$
     \end{tabular}}}\quad
   \scalebox{0.6}{\subtable[Absolute error of $w$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-13          & $0.1$             & $1.02$e-$1$ \\
-      ERK-13          & $0.01$            & $1.02$e-$3$ \\
-      ERK-13          & $0.001$           & $1.11$e-$5$ \\
+      ERK-12          & $0.1$             & $1.02$e-$1$ \\
+      ERK-12          & $0.01$            & $1.02$e-$3$ \\
+      ERK-12          & $0.001$           & $1.02$e-$5$ \\
       \hline
-      ERK-24          & $0.1$             & $1.02$e-$1$ \\
-      ERK-24          & $0.01$            & $1.02$e-$3$ \\
-      ERK-24          & $0.001$           & $1.11$e-$5$ \\
+      ERK-23          & $0.1$             & $1.02$e-$1$ \\
+      ERK-23          & $0.01$            & $1.02$e-$3$ \\
+      ERK-23          & $0.001$           & $1.02$e-$5$ \\
       \hline
-      ERK-36          & $0.1$             & $7.54$e-$4$ \\
-      ERK-36          & $0.01$            & $2.00$e-$6$ \\
-      ERK-36          & $0.001$           & $1.49$e-$6$ \\
+      ERK-35          & $0.1$             & $7.53$e-$4$ \\
+      ERK-35          & $0.01$            & $8.53$e-$7$ \\
+      ERK-35          & $0.001$           & $1.58$e-$7$ \\
       \hline
-      ERK-44          & $0.1$             & $2.30$e-$4$ \\
-      ERK-44          & $0.01$            & $1.49$e-$6$ \\
-      ERK-44          & $0.001$           & $1.49$e-$6$
+      ERK-43          & $0.1$             & $2.30$e-$4$ \\
+      ERK-43          & $0.01$            & $1.59$e-$7$ \\
+      ERK-43          & $0.001$           & $1.59$e-$7$
     \end{tabular}}}\quad
    \scalebox{0.6}{\subtable[Absolute error of $\phi$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-13          & $0.1$             & $1.81$e-$1$ \\
-      ERK-13          & $0.01$            & $1.81$e-$3$ \\
-      ERK-13          & $0.001$           & $1.16$e-$4$ \\
+      ERK-12          & $0.1$             & $1.81$e-$1$ \\
+      ERK-12          & $0.01$            & $1.80$e-$3$ \\
+      ERK-12          & $0.001$           & $2.11$e-$5$ \\
       \hline
-      ERK-24          & $0.1$             & $1.81$e-$1$ \\
-      ERK-24          & $0.01$            & $1.81$e-$3$ \\
-      ERK-24          & $0.001$           & $1.16$e-$4$ \\
+      ERK-23          & $0.1$             & $1.81$e-$1$ \\
+      ERK-23          & $0.01$            & $1.80$e-$3$ \\
+      ERK-23          & $0.001$           & $2.11$e-$5$ \\
       \hline
-      ERK-36          & $0.1$             & $3.70$e-$3$ \\
-      ERK-36          & $0.01$            & $1.15$e-$4$ \\
-      ERK-36          & $0.001$           & $1.15$e-$4$ \\
+      ERK-35          & $0.1$             & $3.70$e-$3$ \\
+      ERK-35          & $0.01$            & $1.09$e-$5$ \\
+      ERK-35          & $0.001$           & $1.04$e-$5$ \\
       \hline
-      ERK-44          & $0.1$             & $4.19$e-$4$ \\
-      ERK-44          & $0.01$            & $1.15$e-$4$ \\
-      ERK-44          & $0.001$           & $1.15$e-$4$
+      ERK-43          & $0.1$             & $4.03$e-$4$ \\
+      ERK-43          & $0.01$            & $1.04$e-$5$ \\
+      ERK-43          & $0.001$           & $1.04$e-$5$
     \end{tabular}}}
 \end{table}
 
@@ -521,79 +526,79 @@ listed in Table \ref{CFK:tab:rel_err}.
   \scalebox{0.6}{\subtable[Relative error of $u$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-13          & $0.1$             & $3.48$e-$6$ \\
-      ERK-13          & $0.01$            & $6.31$e-$8$ \\
-      ERK-13          & $0.001$           & $6.31$e-$8$ \\
+      ERK-12          & $0.1$             & $3.48$e-$6$ \\
+      ERK-12          & $0.01$            & $3.49$e-$8$ \\
+      ERK-12          & $0.001$           & $5.18$e-$9$ \\
       \hline
-      ERK-24          & $0.1$             & $3.17$e-$6$ \\
-      ERK-24          & $0.01$            & $6.31$e-$8$ \\
-      ERK-24          & $0.001$           & $6.31$e-$8$ \\
+      ERK-23          & $0.1$             & $3.17$e-$6$ \\
+      ERK-23          & $0.01$            & $3.16$e-$8$ \\
+      ERK-23          & $0.001$           & $5.18$e-$9$ \\
       \hline
-      ERK-36          & $0.1$             & $6.31$e-$8$ \\
-      ERK-36          & $0.01$            & $6.31$e-$8$ \\
-      ERK-36          & $0.001$           & $6.31$e-$8$ \\
+      ERK-35          & $0.1$             & $5.18$e-$9$ \\
+      ERK-35          & $0.01$            & $5.17$e-$9$ \\
+      ERK-35          & $0.001$           & $5.22$e-$9$ \\
       \hline
-      ERK-44          & $0.1$             & $6.31$e-$8$ \\
-      ERK-44          & $0.01$            & $6.31$e-$8$ \\
-      ERK-44          & $0.001$           & $6.31$e-$8$
+      ERK-43          & $0.1$             & $5.18$e-$9$ \\
+      ERK-43          & $0.01$            & $5.17$e-$9$ \\
+      ERK-43          & $0.001$           & $5.29$e-$9$
     \end{tabular}}}
   \quad
   \scalebox{0.6}{\subtable[Relative error of $v$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-13          & $0.1$             & $1.79$e+$1$ \\
-      ERK-13          & $0.01$            & $8.88$e-$1$ \\
-      ERK-13          & $0.001$           & $8.88$e-$1$ \\
+      ERK-12          & $0.1$             & $1.78$e+$1$ \\
+      ERK-12          & $0.01$            & $2.06$e-$1$ \\
+      ERK-12          & $0.001$           & $2.00$e-$1$ \\
       \hline
-      ERK-24          & $0.1$             & $1.68$e+$1$ \\
-      ERK-24          & $0.01$            & $8.95$e-$1$ \\
-      ERK-24          & $0.001$           & $8.88$e-$1$ \\
+      ERK-23          & $0.1$             & $1.67$e+$1$ \\
+      ERK-23          & $0.01$            & $2.40$e-$1$ \\
+      ERK-23          & $0.001$           & $2.01$e-$1$ \\
       \hline
-      ERK-36          & $0.1$             & $8.88$e-$1$ \\
-      ERK-36          & $0.01$            & $8.88$e-$1$ \\
-      ERK-36          & $0.001$           & $8.88$e-$1$ \\
+      ERK-35          & $0.1$             & $2.04$e-$1$ \\
+      ERK-35          & $0.01$            & $2.00$e-$1$ \\
+      ERK-35          & $0.001$           & $2.00$e-$1$ \\
       \hline
-      ERK-44          & $0.1$             & $8.88$e-$1$ \\
-      ERK-44          & $0.01$            & $8.88$e-$1$ \\
-      ERK-44          & $0.001$           & $8.88$e-$1$
+      ERK-43          & $0.1$             & $2.01$e-$1$ \\
+      ERK-43          & $0.01$            & $2.00$e-$1$ \\
+      ERK-43          & $0.001$           & $2.00$e-$1$
     \end{tabular}}}\quad
   \scalebox{0.6}{\subtable[Relative error of $w$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-13          & $0.1$             & $1.41$e+$8$ \\
-      ERK-13          & $0.01$            & $1.41$e+$6$ \\
-      ERK-13          & $0.001$           & $1.41$e+$4$ \\
+      ERK-12          & $0.1$             & $1.01$e+$7$ \\
+      ERK-12          & $0.01$            & $1.01$e+$5$ \\
+      ERK-12          & $0.001$           & $1.01$e+$3$ \\
       \hline
-      ERK-24          & $0.1$             & $1.41$e+$8$ \\
-      ERK-24          & $0.01$            & $1.41$e+$6$ \\
-      ERK-24          & $0.001$           & $1.41$e+$4$ \\
+      ERK-23          & $0.1$             & $1.01$e+$7$ \\
+      ERK-23          & $0.01$            & $1.01$e+$5$ \\
+      ERK-23          & $0.001$           & $1.01$e+$3$ \\
       \hline
-      ERK-36          & $0.1$             & $1.04$e+$6$ \\
-      ERK-36          & $0.01$            & $1.09$e+$3$ \\
-      ERK-36          & $0.001$           & $5.27$e+$1$ \\
+      ERK-35          & $0.1$             & $7.43$e+$4$ \\
+      ERK-35          & $0.01$            & $7.54$e+$2$ \\
+      ERK-35          & $0.001$           & $2.33$e+$0$ \\
       \hline
-      ERK-44          & $0.1$             & $3.18$e+$5$ \\
-      ERK-44          & $0.01$            & $8.82$e+$1$ \\
-      ERK-44          & $0.001$           & $5.18$e+$1$
+      ERK-43          & $0.1$             & $2.26$e+$4$ \\
+      ERK-43          & $0.01$            & $3.93$e+$0$ \\
+      ERK-43          & $0.001$           & $2.30$e+$0$
     \end{tabular}}}\quad
   \scalebox{0.6}{\subtable[Relative error of $\phi$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-13          & $0.1$             & $7.15$e-$7$ \\
-      ERK-13          & $0.01$            & $7.17$e-$9$ \\
-      ERK-13          & $0.001$           & $4.60$e-$10$ \\
+      ERK-12          & $0.1$             & $7.15$e-$7$ \\
+      ERK-12          & $0.01$            & $7.13$e-$9$ \\
+      ERK-12          & $0.001$           & $8.35$e-$11$ \\
       \hline
-      ERK-24          & $0.1$             & $7.15$e-$7$ \\
-      ERK-24          & $0.01$            & $7.17$e-$9$ \\
-      ERK-24          & $0.001$           & $4.60$e-$10$ \\
+      ERK-23          & $0.1$             & $7.15$e-$7$ \\
+      ERK-23          & $0.01$            & $7.13$e-$9$ \\
+      ERK-23          & $0.001$           & $8.35$e-$11$ \\
       \hline
-      ERK-36          & $0.1$             & $1.47$e-$8$ \\
-      ERK-36          & $0.01$            & $4.53$e-$10$ \\
-      ERK-36          & $0.001$           & $4.53$e-$10$ \\
+      ERK-35          & $0.1$             & $1.46$e-$8$ \\
+      ERK-35          & $0.01$            & $4.31$e-$11$ \\
+      ERK-35          & $0.001$           & $4.11$e-$11$ \\
       \hline
-      ERK-44          & $0.1$             & $1.66$e-$9$ \\
-      ERK-44          & $0.01$            & $4.53$e-$10$ \\
-      ERK-44          & $0.001$           & $4.53$e-$10$
+      ERK-43          & $0.1$             & $1.60$e-$9$ \\
+      ERK-43          & $0.01$            & $4.10$e-$11$ \\
+      ERK-43          & $0.001$           & $4.11$e-$11$
     \end{tabular}}}
 \end{table}
 
@@ -601,7 +606,7 @@ Note that the value of $w$ is small, so even though the absolute error
 of the IFRK methods is satisfactory, the relative error is rather
  large. Recall from Table \ref{CFK:tab:PadeError} that the error of the 
 $(2,2)$-Pad\`e approximation that we are implementing is $\mathcal{O}(10^{-10})$.
-This doesn't take into account the error from the IFRK method itself, 
+This does not take into account the error from the IFRK method itself, 
 and combining this error with the loss of digits that may happen because of 
 the small values of $w$, it is not surprising that the relative error of 
 $w$ is larger than that of the other variables.
@@ -609,7 +614,8 @@ $w$ is larger than that of the other variables.
 We graph these errors in Figure \ref{CFK:fig:convtest}. The slope of these 
 methods flattens out as the timestep goes to zero. One possible 
 explanation for this is that the accuracy may be limited by the accuracy of 
-the matrix exponential \A{Also could be accuracy of the ''truth''}.
+the matrix exponential. Another potential explanation is that we are 
+limited by the accuracy of the ``truth.'' 
 
 \begin{figure}[ht]
 \label{CFK:fig:convtest}

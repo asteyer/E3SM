@@ -503,7 +503,8 @@ contains
 !  print *, "entry of approx =  ", approxexpJac(1,1)
 !  stop
 ! Rational approximation
-    call matrix_exponential2(JacL, JacD, JacU,.false.,20,1.d0, approxexpJac)
+!    call matrix_exponential2(JacL, JacD, JacU,.false.,20,1.d0, approxexpJac) !    Taylor approx
+    call matrix_exponential(JacL,JacD,JacU,.false.,20,1.d0,approxexpJac)
     error = norm2(real(exactExp) - approxexpJac)
     if (error > 1e-3) then 
       write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
