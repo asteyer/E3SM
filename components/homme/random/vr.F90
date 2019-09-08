@@ -70,7 +70,7 @@ contains
        call remap1_nofilter(qdp,nx,qsize,nlev,dp1,dp2)
        return
     endif
-    if (vert_remap_q_alg == 1 .or. vert_remap_q_alg == 2 .or. vert_remap_q_alg == 3) then
+    if (vert_remap_q_alg == 1 .or. vert_remap_q_alg == 2 .or. vert_remap_q_alg == 3 .or. vert_remap_q_alg == 10) then
        call remap_Q_ppm(qdp,nx,qsize,nlev,vert_remap_q_alg,dp1,dp2)
        return
     endif
@@ -563,6 +563,11 @@ contains
                    ao(nlev+k) = ao(nlev+1-k)
                 endif
              enddo
+             if (vert_remap_q_alg == 10) then
+                call linextrap(dpo(2), dpo(1), dpo(0), dpo(-1), ao(2), ao(1), ao(0), ao(-1))
+                call linextrap(dpo(nlev-1), dpo(nlev), dpo(nlev+1), dpo(nlev+2), &
+                     ao(nlev-1), ao(nlev), ao(nlev+1), ao(nlev+2))
+             end if
              !Compute monotonic and conservative PPM reconstruction over every cell
              coefs(:,:) = compute_ppm( ao , ppmdx, nlev, vert_remap_q_alg )
              !Compute tracer values on the new grid by integrating from the old cell bottom to the new
@@ -712,6 +717,23 @@ contains
     end do
     k = lo
   end subroutine binary_search
+
+  subroutine linextrap(dx1,dx2,dx3,dx4,y1,y2,y3,y4)
+    real(r8), intent(in) :: dx1,dx2,dx3,dx4,y1,y2
+    real(r8), intent(out) :: y3,y4
+
+    real(r8) :: x1,x2,x3,x4,a
+
+    x1 = 0.5d0*dx1
+    x2 = x1 + 0.5d0*(dx1 + dx2)
+    x3 = x2 + 0.5d0*(dx2 + dx3)
+    x4 = x3 + 0.5d0*(dx3 + dx4)
+
+    a = (x3-x1)/(x2-x1)
+    y3 = (1-a)*y1 + a*y2
+    a = (x4-x1)/(x2-x1)
+    y4 = (1-a)*y1 + a*y2    
+  end subroutine linextrap
 
   ! ----------------------------------------------------------------------------
   ! PL version from https://raw.githubusercontent.com/PeterHjortLauritzen/opt-se-cslam/master/components/cam/src/dynamics/se/dycore/vertremap_mod.F90
@@ -1186,22 +1208,25 @@ contains
     real(real_kind), intent(in) :: x
     real(real_kind) :: f
 
-    f = cos(7.d0*x**2 + 0.33)
+    f = cos(7.d0*x**2 + 0.33) - 4*x + x**3 - 0.4*x**2
   end function eval_f
   
   subroutine test()
     integer, parameter :: nme = 12, nlev_max = 2**nme
     real(real_kind), parameter :: pi = 3.141592653589793
 
+    integer, parameter :: algs(6) = (/-1,0,1,2,3,10/)
+
     real(real_kind) :: p1(nlev_max+1), p2(nlev_max+1), dp1(nlev_max), dp2(nlev_max), &
          Qdp(1,1,nlev_max,1), c1, re, re_prev, ooa, f, ft, num, den
-    integer :: alg, i, k, nlev, pl
+    integer :: alg, algidx, i, k, nlev, pl
     logical :: first
     
     c1 = 0.5d0
 
     do pl = 0,1
-       do alg = -1,3
+       do algidx = 1, size(algs)
+          alg = algs(algidx)
           write(*,'(a,i3,i3)') 'alg>',pl,alg
           first = .true.
           do i = 3,nme
@@ -1273,7 +1298,13 @@ contains
     dp2(1,1,:nlev) = dp2i(:nlev)
     Qdp(1,1,:nlev,1) = Qdpi(:nlev)
 
-    call remap1(Qdp, 1, 1, nlev, alg, dp1, dp2)
+    if (alg <= 3 .or. alg >= 10) then
+       call remap1(Qdp, 1, 1, nlev, alg, dp1, dp2)
+    elseif (alg == 4) then
+       call pl_remap1_nofilter(Qdp, 1, 1, nlev, -1, dp1, dp2)
+    elseif (alg > 4 .and. alg <= 6) then
+       call pl_remap1(Qdp, 1, 1, 1, 1, nlev, alg - 4, dp1, dp2)
+    end if
 
     Qdpi(:nlev) = Qdp(1,1,:nlev,1)
   end subroutine remap1c

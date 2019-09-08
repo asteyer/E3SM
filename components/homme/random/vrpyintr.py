@@ -13,7 +13,7 @@ def remap1(alg, dp1, dp2, Qdp):
     assert(len(dp2) == n)
     assert(len(Qdp) == n)
     assert(type(alg) == int)
-    assert(alg >= -1 and alg <= 3)
+    assert((alg >= -1 and alg <= 6) or (alg == 10))
     
     c_int = ctypes.c_int
     c_double = ctypes.c_double
@@ -34,7 +34,7 @@ def test():
     p1m = cc(p1)
     dp1 = npy.diff(p1)
     Qdp1 = npy.sin(2.2*math.pi*p1m + 0.3)*dp1
-    Qdp2 = remap1(2, dp1, dp2, Qdp1)
+    Qdp2 = remap1(-1, dp1, dp2, Qdp1)
     pl.plot(p1m, Qdp1/dp1, "r-", p2m, Qdp2/dp2, "k-")
     pl.show()
 
