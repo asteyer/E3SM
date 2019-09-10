@@ -1208,7 +1208,8 @@ contains
     real(real_kind), intent(in) :: x
     real(real_kind) :: f
 
-    f = cos(7.d0*x**2 + 0.33) - 4*x + x**3 - 0.4*x**2
+    f = cos(7.d0*x**2 + 0.33) + x**3 - 0.4*x**2 !+ x
+    !                                            ^ this term makes the OOA 1.5, except for linextrap
   end function eval_f
   
   subroutine test()
