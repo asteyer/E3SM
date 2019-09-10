@@ -719,19 +719,21 @@ contains
   end subroutine binary_search
 
   subroutine linextrap(dx1,dx2,dx3,dx4,y1,y2,y3,y4)
-    real(r8), intent(in) :: dx1,dx2,dx3,dx4,y1,y2
-    real(r8), intent(out) :: y3,y4
+    real(kind=real_kind), intent(in) :: dx1,dx2,dx3,dx4,y1,y2
+    real(kind=real_kind), intent(out) :: y3,y4
 
-    real(r8) :: x1,x2,x3,x4,a
+    real(kind=real_kind), parameter :: half = 0.5d0
 
-    x1 = 0.5d0*dx1
-    x2 = x1 + 0.5d0*(dx1 + dx2)
-    x3 = x2 + 0.5d0*(dx2 + dx3)
-    x4 = x3 + 0.5d0*(dx3 + dx4)
+    real(kind=real_kind) :: x1,x2,x3,x4,a
 
-    a = (x3-x1)/(x2-x1)
+    x1 = half*dx1
+    x2 = x1 + half*(dx1 + dx2)
+    x3 = x2 + half*(dx2 + dx3)
+    x4 = x3 + half*(dx3 + dx4)
+
+    a  = (x3-x1)/(x2-x1)
     y3 = (1-a)*y1 + a*y2
-    a = (x4-x1)/(x2-x1)
+    a  = (x4-x1)/(x2-x1)
     y4 = (1-a)*y1 + a*y2    
   end subroutine linextrap
 
@@ -1208,7 +1210,7 @@ contains
     real(real_kind), intent(in) :: x
     real(real_kind) :: f
 
-    f = cos(7.d0*x**2 + 0.33) + x**3 - 0.4*x**2 !+ x
+    f = cos(7.d0*x**2 + 0.33) + x**3 - 0.4*x**2  + x
     !                                            ^ this term makes the OOA 1.5, except for linextrap
   end function eval_f
   
