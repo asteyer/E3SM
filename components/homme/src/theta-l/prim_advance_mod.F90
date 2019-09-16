@@ -116,7 +116,7 @@ contains
     real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
     real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
     real (kind=real_kind) :: dphi(nlev)
-    real (kind=real_kind) :: phi_k(2*nlev,1,np,np,nete-nets+1)
+    real (kind=real_kind) :: phi_k(2*nlev,np,np,nete-nets+1)
     integer :: ii
 
     call t_startf('prim_advance_exp')
@@ -1005,13 +1005,18 @@ contains
 !      call phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
 
       call phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,phi_k,np1,elem,nets,nete)
-      call phi_func_update_wphi(elem,np1,phi_k(:,1,:,:,:),dt,nets,nete)
+      call phi_func_update_wphi(elem,np1,phi_k,dt,nets,nete)
       call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
+
+!      do ie = nets,nete
+!        elem(ie)%state%w_i(:,:,1:nlev,np1) = elem(ie)%state%w_i(:,:,1:nlev,np1) + elem(ie)%state%w_i(:,:,1:nlev,n0) 
+!        elem(ie)%state%phinh_i(:,:,1:nlev,np1) = elem(ie)%state%phinh_i(:,:,1:nlev,np1) + elem(ie)%state%phinh_i(:,:,1:nlev,n0) 
+!      end do
 
 !!==========================================================================================================
 !!==========================================================================================================
     elseif (tstep_type == 21) then ! Second order ETD Method
-      c2 = 0.d5
+      c2 = 1.d0/2.d0
 
       ! Compute JacL, JacD, and JacU
       do ie = nets,nete
@@ -1027,21 +1032,66 @@ contains
 
       ! Stage1 = u_m is in n0
       ! Calculate Stage2 = exp(Ldt)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
+      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
       call phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,phi_k,np1,elem,nets,nete)
-      call phi_func_update_wphi(elem,np1,phi_k(:,1,:,:,:),c2*dt,nets,nete) !phi1(c2dtL)N(u;tm) is in np1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
+      call phi_func_update_wphi(elem,np1,phi_k,c2*dt,nets,nete) !phi1(c2dtL)N(u;tm) is in np1
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt,nets,nete) ! exp(Ldt)u_m is in nm1
+!      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
+      call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete) !Stage 2 is in np1
 
       ! Calculate Stage3 = exp(Ldt)u_m + dt[phi1(dtL)N(u_m;t_m)-1/c2phi2(dtL)N(u_m;t_m)+1/c2phi2(dtL)N(Stage2;tm+c2dt)]
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
+      call phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,np1,elem,nets,nete)
+      call phi_func_update_wphi(elem,np1,phi_k,dt/c2,nets,nete)
+!      call linear_combination_of_elem(np1,dt*1/c2,np1,0.d0,n0,elem,nets,nete) ! dt/c2phi2(dtL)N(Stage2;tm+c2dt) is in np1
 
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,nm1,elem,nets,nete)
+      call phi_func_update_wphi(elem,nm1,phi_k,-dt/c2,nets,nete)
+!      call linear_combination_of_elem(np1,-1/c2*dt,nm1,1.d0,np1,elem,nets,nete) !Last two terms stored in np1
+      call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete) !Last two terms stored in np1
+
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,phi_k,nm1,elem,nets,nete)
+      call phi_func_update_wphi(elem,nm1,phi_k,dt,nets,nete)
+!      call linear_combination_of_elem(np1,dt,nm1,1.d0,np1,elem,nets,nete) ! Last three terms stored in np1
+      call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete) ! Last three terms stored in np1
+
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete)  ! Stage 3 stored in np1
 
 
       ! Calculate ump1 = exp(Ldt)u_m + dt[phi1(dtL)N(um;tm)-phi2(dtL)N(um;tm)+phi2(dtL)N(Stage3;tm+dt)]
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
+      call phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,np1,elem,nets,nete)
+      call phi_func_update_wphi(elem,np1,phi_k,dt,nets,nete)
+!      call linear_combination_of_elem(np1,dt,np1,0.d0,n0,elem,nets,nete) ! Last term stored in np1
 
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete) ! First and last terms stored in np1
 
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,phi_k,nm1,elem,nets,nete)
+      call phi_func_update_wphi(elem,nm1,phi_k,dt,nets,nete)
+!      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete) ! Second term added to np1
+      call linear_combination_of_elem(np1,1.d0,np1,1.d0,nm1,elem,nets,nete) ! Second term added to np1
+
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,nm1,elem,nets,nete)
+      call phi_func_update_wphi(elem,nm1,phi_k,-dt,nets,nete)
+!      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,1.d0,n0,elem,nets,nete)
 
 
 
@@ -3438,7 +3488,7 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
 
   real (kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1),JacU_elem(nlev-1,np,np,nete-nets+1),dt
   integer, intent(in)                :: deg,n0,nets,nete
-  real (kind=real_kind), intent(out) :: phi_k(2*nlev,deg,np,np,nete-nets+1)
+  real (kind=real_kind), intent(out) :: phi_k(2*nlev,np,np,nete-nets+1)
   type(element_t), intent(inout) :: elem(:)
 
   ! local variables
@@ -3447,7 +3497,7 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
   integer :: i,j,k,ie,info,dimJac
   integer :: ipiv(nlev)
   complex(kind=8) :: work(nlev)
-
+  
   do ie = nets, nete
     do i = 1,np
       do j = 1,np
@@ -3483,16 +3533,16 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
         c = wphivec
         call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,expJ,c)
         c = c - wphivec
-        phi_k(:,1,i,j,ie) = matmul(JInv,c) 
-        ! make a new method that does the following, outside of phi func
-!        elem(ie)%state%w_i(i,j,1:nlev,n0) = dt*phi_k(1:nlev,1)
-!        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = dt*phi_k(nlev+1:2*nlev,1)
+        phi_k(:,i,j,ie) = matmul(JInv,c) 
         if (deg .gt. 2) then
           do k = 2,deg
-            phi_k(:,k,i,j,ie) = phi_k(:,k-1,i,j,ie) - 1/gamma(dble(k))*wphivec
-            phi_k(:,k,i,j,ie) = matmul(JInv,phi_k(:,k,i,j,ie))
+            phi_k(:,i,j,ie) = phi_k(:,i,j,ie) - 1/gamma(dble(k))*wphivec
+            phi_k(:,i,j,ie) = matmul(JInv,phi_k(:,i,j,ie))
           end do
         end if
+        ! make a new method that does the following, outside of phi func
+!        elem(ie)%state%w_i(i,j,1:nlev,n0) = dt*phi_k(1:nlev,i,j,ie)
+!        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = dt*phi_k(nlev+1:2*nlev,i,j,ie)
       end do
     end do
   end do
