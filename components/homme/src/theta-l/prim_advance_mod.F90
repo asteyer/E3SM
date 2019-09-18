@@ -1016,7 +1016,7 @@ contains
 !!==========================================================================================================
 !!==========================================================================================================
     elseif (tstep_type == 21) then ! Second order ETD Method
-      c2 = 1.d0/2.d0
+      c2 = 3.d0/4.d0
 
       ! Compute JacL, JacD, and JacU
       do ie = nets,nete
@@ -1031,14 +1031,14 @@ contains
       end do
 
       ! Stage1 = u_m is in n0
-      ! Calculate Stage2 = exp(Ldt)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
+      ! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
       call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
       call phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,phi_k,np1,elem,nets,nete)
       call phi_func_update_wphi(elem,np1,phi_k,c2*dt,nets,nete) !phi1(c2dtL)N(u;tm) is in np1
       call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt,nets,nete) ! exp(Ldt)u_m is in nm1
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
 !      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
       call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete) !Stage 2 is in np1
 
@@ -1091,7 +1091,7 @@ contains
       call phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,nm1,elem,nets,nete)
       call phi_func_update_wphi(elem,nm1,phi_k,-dt,nets,nete)
 !      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0,n0,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,1.d0,nm1,elem,nets,nete)
 
 
 
