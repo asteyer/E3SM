@@ -1003,7 +1003,7 @@ contains
        deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,0.d0)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,.false.,dt,nets,nete)
 
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,phi_k,np1,elem,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
       call linear_combination_of_elem(np1,1.d0,n0,dt,np1,elem,nets,nete)
 
 !!==========================================================================================================
@@ -1027,7 +1027,7 @@ contains
       ! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
       call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,phi_k,np1,elem,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
       call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
       call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
@@ -1035,17 +1035,17 @@ contains
       ! Calculate Stage3 = exp(Ldt)u_m + dt[phi1(dtL)N(u_m;t_m)-1/c2phi2(dtL)N(u_m;t_m)+1/c2phi2(dtL)N(Stage2;tm+c2dt)]
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,np1,elem,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
       call linear_combination_of_elem(np1,dt/c2,np1,0.d0,n0,elem,nets,nete) ! dt/c2phi2(dtL)N(Stage2;tm+c2dt) is in np1
 
       call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,nm1,elem,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
       call linear_combination_of_elem(np1,-dt/c2,nm1,1.d0,np1,elem,nets,nete) !Last two terms stored in np1
 
       call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,phi_k,nm1,elem,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
       call linear_combination_of_elem(np1,dt,nm1,1.d0,np1,elem,nets,nete) ! Last three terms stored in np1
 
       call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
@@ -1056,7 +1056,7 @@ contains
       ! Calculate ump1 = exp(Ldt)u_m + dt[phi1(dtL)N(um;tm)-phi2(dtL)N(um;tm)+phi2(dtL)N(Stage3;tm+dt)]
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,np1,elem,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
 
       call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt,nets,nete)
@@ -1064,12 +1064,12 @@ contains
 
       call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,phi_k,nm1,elem,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete) ! Second term added to np1
 
       call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_k,nm1,elem,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,-dt,nm1,elem,nets,nete)
 
 
@@ -3465,17 +3465,16 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
 ! This subroutine calculates the phi function phi_k(Ldt) and applies it
 ! to the state variables located in elem(n0).
 !============================================================================
-  subroutine apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,deg,phi_k,n0,elem,nets,nete)
+  subroutine apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,deg,n0,elem,nets,nete)
 
   real(kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),&
        JacD_elem(nlev,np,np,nete-nets+1),JacU_elem(nlev-1,np,np,nete-nets+1),dt
   integer, intent(in)               :: deg,n0,nets,nete
-  real(kind=real_kind), intent(out) :: phi_k(2*nlev,np,np,nete-nets+1)
   type(element_t), intent(inout)    :: elem(:)
 
   ! local variables
   real(kind=real_kind)  :: Jac(2*nlev,2*nlev),JInv(2*nlev,2*nlev),expJ(2*nlev,2*nlev),&
-      wphivec(2*nlev),c(2*nlev)
+      wphivec(2*nlev),c(2*nlev), phi_k(2*nlev,np,np,nete-nets+1)
   integer               :: i,j,k,ie,info,dimJac
   integer               :: ipiv(nlev)
   complex(kind=8)       :: work(nlev)
