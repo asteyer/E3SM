@@ -89,17 +89,17 @@ partitioning are discussed in \cite{CFK:Steyer2019}.
 In this paper, we consider IFRK methods (\cite{CFK:Minchev2006}) as 
 an alternative integrator for HOMME-NH with a horizontally explicit 
 vertically integrating factor exponential (HEVIE) partitioning. Given an 
-approximate solution trajectory $\omega_m \approx \omega(t_m)$, we define a 
-new additive partitioning of \ref{CFK:eqn:ode} by linearizing the stiff 
-part, $s(\omega)$, along $\omega_m$. Let $L_m=\frac{\partial s}{\partial
-{\omega}}(\omega_m)$, and set $N_m(\omega) = f(\omega) - L_m \omega$. With 
-IFRK methods, we split our equation as \[ \omega_t = f(\omega) = 
-L_m\omega +  N_m(\omega).\] With this partitioning, $L_m$ is a  linear 
-operator containing the stiff part of the equation, and $N_m(\omega)$ 
-contains the nonstiff terms. Often, $L_m = f'(\omega)$, but we do not 
-assume this is the case. Using the change of variables $\nu(t)=e^{-L_m
-(t-t_m)}\omega(t)$, we have \begin{equation}
-\label{CFK:eqn:vode}
+approximate solution trajectory $\omega_m \approx \omega(t_m)$, we define 
+a new additive partitioning of \ref{CFK:eqn:ode} by linearizing the stiff 
+part, $s(\omega)$, along $\omega_m$. Often, $L_m = f'(\omega)$, but we do 
+not assume this is the case. Let $L_m=\frac{\partial s}{\partial{\omega}}
+(\omega_m)$, and set $N_m(\omega) = f(\omega) - L_m \omega$. With IFRK 
+methods, we split our equation as \[ \omega_t = f(\omega) = L_m\omega +  
+N_m(\omega).\] With this partitioning, $L_m$ is a  linear operator 
+containing the stiff part of the equation, and $N_m(\omega)$ contains the 
+nonstiff terms. Using the change of variables $\nu(t)=e^{-L_m(t-t_m)}
+\omega(t)$, we have 
+\begin{equation}\label{CFK:eqn:vode}
 \nu_t = e^{-L_m(t-t_m)}N_m(e^{L_m(t-t_m)}\nu). \end{equation} 
 We then use a fully explicit $r-$stage RK method to solve equation 
 \ref{CFK:eqn:vode}, as explained in Section \ref{CFK:sec:ifrk}.
@@ -110,9 +110,12 @@ exponential. For this reason, matrix exponential methods were seldom used
 in practice, but advances in efficiently forming $e^A$ have recently made 
 exponential-type methods a competitive choice for integrating stiff initial 
 value problems (e.g., \cite{CFK:Clancy2013}, \cite{CFK:Garcia2014}). 
-Furthermore, the structure of the Jacobian in HOMME-NH allows us to form 
-these matrix exponentials quickly and in parallel over the horizontal mesh, 
-making this a viable alternative to the IMEX RK methods.
+Furthermore, the Jacobian obtained from linearizing the stiff terms in 
+HOMME-NH is sparse, with a tridiagonal block and a block that is a scalar 
+multiple of the identity (Equation \ref{CFK:eqn:Jacobian}). This structure 
+allows us to form these matrix exponentials quickly and in parallel over 
+the horizontal mesh, making this approach a viable alternative to the IMEX 
+RK methods.
 
 The rest of the paper is structured as follows: In Section 
 \ref{CFK:sec:matexp} we give a brief background of numerical approximations 
@@ -125,12 +128,9 @@ results are given in Section \ref{CFK:sec:results}.
 \label{CFK:sec:matexp} 
 The matrix exponential is defined by the power series 
 \[ e^A = \sum_{j=0}^\infty \frac{1}{j!}A^j.\]
-If the eigenvalues and eigenvectors of $A$ are known, then $e^A$ can be 
-formed analytically. However, finding the eigenvalues of $A$ is expensive, 
-and it is not generally guaranteed that $A$ is diagonalizable. A more 
-efficient approach is to approximate $e^{A}$ using a Pad\'e or Taylor 
-series approximation. Other methods of approximating the matrix exponential 
-are discussed in \cite{CFK:Moler2003}.
+A simple approach to numerically approximate $e^{A}$ is through a Pad\'e or 
+Taylor series approximation. Other methods of approximating the matrix 
+exponential are discussed in \cite{CFK:Moler2003}.
 
 We choose to implement a $(p,q)$-Pad\'e approximation 
 $e^{A}\approx \left[Q_{pq}(A)\right]^{-1}P_{pq}(A)$, where $P_{pq}(A)$ and 
@@ -365,9 +365,8 @@ approximation we choose to implement in our IFRK methods.
 \section{Integrating Factor Runge-Kutta Methods}\label{CFK:sec:ifrk}
 The focus of this paper is to implement IFRK methods in the HOMME-NH 
 nonhydrostatic atmosphere model. IFRK methods were introduced in 
-\cite{CFK:Lawson1969}, shown to be a type of exponential RK method by
-\cite{CFK:Minchev2006}, and proven in \cite{CFK:Isherwood2018} to be 
-strong stability preserving (SSP) if the underlying RK method is SSP.
+\cite{CFK:Lawson1969} and shown to be a type of exponential RK method by
+\cite{CFK:Minchev2006}.
 
 For IFRK methods, we use an explicit $r$-stage RK method to solve 
 equation \ref{CFK:eqn:vode}. If the Butcher tableau is given by 
