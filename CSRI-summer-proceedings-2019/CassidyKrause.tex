@@ -384,9 +384,9 @@ stages. Here, we consider four explicit RK methods, given by the Butcher
 tableaux below.
 \begin{align*}&\text{ERK-}12:
  \begin{array}{c|ccc}
-0   & 0   & 0 & 0\\
-1/2 & 1/2 & 0 & 0\\
-1   & 0   & 1 & 0\\
+0   & 0 & 0 & 0\\
+1   & 1 & 0 & 0\\
+1   & 0 & 1 & 0\\
 \hline
     & 0   & 1 & 0
 \end{array}
@@ -442,79 +442,96 @@ and the relative errors are listed in Table \ref{CFK:tab:rel_err}.
   \scalebox{0.6}{\subtable[Absolute error of $u$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-12          & $0.1$             & $3.11$e-$4$ \\
-      ERK-12          & $0.01$            & $3.12$e-$6$ \\
-      ERK-12          & $0.001$           & $9.10$e-$8$ \\
+      ERK-12          & $0.1$            & $3.59$e-$6$ \\
+      ERK-12          & $0.05$           & $4.11$e-$7$ \\
+      ERK-12          & $0.02$           & $1.31$e-$7$ \\
+      ERK-12          & $0.01$           & $1.17$e-$7$ \\
       \hline
-      ERK-23          & $0.1$             & $2.84$e-$4$ \\
-      ERK-23          & $0.01$            & $2.83$e-$6$ \\
-      ERK-23          & $0.001$           & $9.10$e-$8$ \\
+      ERK-23          & $0.1$            & $8.41$e-$7$ \\
+      ERK-23          & $0.05$           & $2.12$e-$7$ \\
+      ERK-23          & $0.02$           & $3.40$e-$8$ \\
+      ERK-23          & $0.01$           & $8.50$e-$9$ \\
       \hline
-      ERK-35          & $0.1$             & $3.48$e-$7$ \\
-      ERK-35          & $0.01$            & $9.10$e-$8$ \\
-      ERK-35          & $0.001$           & $9.11$e-$8$ \\
+      ERK-35          & $0.1$            & $3.15$e-$9$ \\
+      ERK-35          & $0.05$           & $5.20$e-$11$ \\
+      ERK-35          & $0.02$           & $1.00$e-$11$ \\
+      ERK-35          & $0.01$           & $2.05$e-$12$ \\
       \hline
-      ERK-43          & $0.1$             & $1.51$e-$7$ \\
-      ERK-43          & $0.01$            & $9.10$e-$8$ \\
-      ERK-43          & $0.001$           & $9.11$e-$8$
+      ERK-43          & $0.1$            & $1.63$e-$8$ \\
+      ERK-43          & $0.05$           & $1.03$e-$9$ \\
+      ERK-43          & $0.02$           & $2.60$e-$11$ \\
+      ERK-43          & $0.01$           & $1.60$e-$12$
     \end{tabular}}}
   \quad
   \scalebox{0.6}{\subtable[Absolute error of $v$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-12          & $0.1$             & $3.22$e-$4$ \\
-      ERK-12          & $0.01$            & $3.22$e-$6$ \\
-      ERK-12          & $0.001$           & $7.07$e-$8$ \\
+      ERK-12          & $0.1$            & $1.43$e-$6$ \\
+      ERK-12          & $0.05$           & $1.78$e-$7$ \\
+      ERK-12          & $0.02$           & $5.33$e-$8$ \\
+      ERK-12          & $0.01$           & $4.72$e-$8$ \\
       \hline
-      ERK-23          & $0.1$             & $2.93$e-$4$ \\
-      ERK-23          & $0.01$            & $2.93$e-$6$ \\
-      ERK-23          & $0.001$           & $7.99$e-$8$ \\
+      ERK-23          & $0.1$            & $3.42$e-$7$ \\
+      ERK-23          & $0.05$           & $8.55$e-$8$ \\
+      ERK-23          & $0.02$           & $1.37$e-$8$ \\
+      ERK-23          & $0.01$           & $3.42$e-$9$ \\
       \hline
-      ERK-35          & $0.1$             & $3.55$e-$7$ \\
-      ERK-35          & $0.01$            & $7.05$e-$8$ \\
-      ERK-35          & $0.001$           & $7.00$e-$8$ \\
+      ERK-35          & $0.1$            & $6.32$e-$9$ \\
+      ERK-35          & $0.05$           & $1.17$e-$10$ \\
+      ERK-35          & $0.02$           & $1.92$e-$11$ \\
+      ERK-35          & $0.01$           & $3.59$e-$12$ \\
       \hline
-      ERK-43          & $0.1$             & $1.56$e-$7$ \\
-      ERK-43          & $0.01$            & $7.05$e-$8$ \\
-      ERK-43          & $0.001$           & $7.00$e-$8$
+      ERK-43          & $0.1$            & $7.99$e-$9$ \\
+      ERK-43          & $0.05$           & $5.01$e-$10$ \\
+      ERK-43          & $0.02$           & $1.27$e-$11$ \\
+      ERK-43          & $0.01$           & $8.16$e-$13$
     \end{tabular}}}\quad
   \scalebox{0.6}{\subtable[Absolute error of $w$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-12          & $0.1$             & $1.02$e-$1$ \\
-      ERK-12          & $0.01$            & $1.02$e-$3$ \\
-      ERK-12          & $0.001$           & $1.02$e-$5$ \\
+      ERK-12          & $0.1$            & $6.85$e+$0$ \\
+      ERK-12          & $0.05$           & $4.55$e-$0$ \\
+      ERK-12          & $0.02$           & $2.03$e-$0$ \\
+      ERK-12          & $0.01$           & $1.05$e-$0$ \\
+       \hline
+      ERK-23          & $0.1$            & $1.80$e-$0$ \\
+      ERK-23          & $0.05$           & $4.48$e-$1$ \\
+      ERK-23          & $0.02$           & $7.16$e-$2$ \\
+      ERK-23          & $0.01$           & $1.79$e-$2$ \\
       \hline
-      ERK-23          & $0.1$             & $1.02$e-$1$ \\
-      ERK-23          & $0.01$            & $1.02$e-$3$ \\
-      ERK-23          & $0.001$           & $1.02$e-$5$ \\
+      ERK-35          & $0.1$            & $2.12$e-$2$ \\
+      ERK-35          & $0.05$           & $2.56$e-$3$ \\
+      ERK-35          & $0.02$           & $1.60$e-$4$ \\
+      ERK-35          & $0.01$           & $2.00$e-$5$ \\
       \hline
-      ERK-35          & $0.1$             & $7.53$e-$4$ \\
-      ERK-35          & $0.01$            & $8.53$e-$7$ \\
-      ERK-35          & $0.001$           & $1.58$e-$7$ \\
-      \hline
-      ERK-43          & $0.1$             & $2.30$e-$4$ \\
-      ERK-43          & $0.01$            & $1.59$e-$7$ \\
-      ERK-43          & $0.001$           & $1.59$e-$7$
+      ERK-43          & $0.1$            & $5.02$e-$2$ \\
+      ERK-43          & $0.05$           & $3.16$e-$3$ \\
+      ERK-43          & $0.02$           & $8.12$e-$5$ \\
+      ERK-43          & $0.01$           & $5.09$e-$6$
+
     \end{tabular}}}\quad
    \scalebox{0.6}{\subtable[Absolute error of $\phi$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-12          & $0.1$             & $1.81$e-$1$ \\
-      ERK-12          & $0.01$            & $1.80$e-$3$ \\
-      ERK-12          & $0.001$           & $2.11$e-$5$ \\
+      ERK-12          & $0.1$            & $9.12$e+$2$ \\
+      ERK-12          & $0.05$           & $4.45$e+$2$ \\
+      ERK-12          & $0.02$           & $1.79$e+$1$ \\
+      ERK-12          & $0.01$           & $8.97$e+$1$ \\
       \hline
-      ERK-23          & $0.1$             & $1.81$e-$1$ \\
-      ERK-23          & $0.01$            & $1.80$e-$3$ \\
-      ERK-23          & $0.001$           & $2.11$e-$5$ \\
+      ERK-23          & $0.1$            & $5.05$e-$1$ \\
+      ERK-23          & $0.05$           & $1.28$e-$1$ \\
+      ERK-23          & $0.02$           & $2.05$e-$2$ \\
+      ERK-23          & $0.01$           & $5.13$e-$3$ \\
       \hline
-      ERK-35          & $0.1$             & $3.70$e-$3$ \\
-      ERK-35          & $0.01$            & $1.09$e-$5$ \\
-      ERK-35          & $0.001$           & $1.04$e-$5$ \\
+      ERK-35          & $0.1$            & $1.13$e-$1$ \\
+      ERK-35          & $0.05$           & $1.41$e-$2$ \\
+      ERK-35          & $0.02$           & $8.99$e-$4$ \\
+      ERK-35          & $0.01$           & $1.12$e-$4$ \\
       \hline
-      ERK-43          & $0.1$             & $4.03$e-$4$ \\
-      ERK-43          & $0.01$            & $1.04$e-$5$ \\
-      ERK-43          & $0.001$           & $1.04$e-$5$
+      ERK-43          & $0.1$            & $2.05$e-$2$ \\
+      ERK-43          & $0.05$           & $1.29$e-$3$ \\
+      ERK-43          & $0.02$           & $3.31$e-$5$ \\
+      ERK-43          & $0.01$           & $2.06$e-$6$
     \end{tabular}}}
 \end{table}
 
@@ -525,79 +542,96 @@ and the relative errors are listed in Table \ref{CFK:tab:rel_err}.
   \scalebox{0.6}{\subtable[Relative error of $u$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-12          & $0.1$             & $3.48$e-$6$ \\
-      ERK-12          & $0.01$            & $3.49$e-$8$ \\
-      ERK-12          & $0.001$           & $5.18$e-$9$ \\
+      ERK-12          & $0.1$            & $2.52$e-$7$ \\
+      ERK-12          & $0.05$           & $2.89$e-$8$ \\
+      ERK-12          & $0.02$           & $9.22$e-$9$ \\
+      ERK-12          & $0.01$           & $8.18$e-$9$ \\
+       \hline
+      ERK-23          & $0.1$            & $5.90$e-$8$ \\
+      ERK-23          & $0.05$           & $1.49$e-$8$ \\
+      ERK-23          & $0.02$           & $2.39$e-$9$ \\
+      ERK-23          & $0.01$           & $5.97$e-$10$ \\
       \hline
-      ERK-23          & $0.1$             & $3.17$e-$6$ \\
-      ERK-23          & $0.01$            & $3.16$e-$8$ \\
-      ERK-23          & $0.001$           & $5.18$e-$9$ \\
+      ERK-35          & $0.1$            & $2.21$e-$10$ \\
+      ERK-35          & $0.05$           & $3.65$e-$12$ \\
+      ERK-35          & $0.02$           & $7.03$e-$13$ \\
+      ERK-35          & $0.01$           & $1.44$e-$13$ \\
       \hline
-      ERK-35          & $0.1$             & $5.18$e-$9$ \\
-      ERK-35          & $0.01$            & $5.17$e-$9$ \\
-      ERK-35          & $0.001$           & $5.22$e-$9$ \\
-      \hline
-      ERK-43          & $0.1$             & $5.18$e-$9$ \\
-      ERK-43          & $0.01$            & $5.17$e-$9$ \\
-      ERK-43          & $0.001$           & $5.29$e-$9$
+      ERK-43          & $0.1$            & $1.15$e-$9$ \\
+      ERK-43          & $0.05$           & $7.20$e-$11$ \\
+      ERK-43          & $0.02$           & $1.83$e-$12$ \\
+      ERK-43          & $0.01$           & $1.13$e-$13$
+
     \end{tabular}}}
   \quad
   \scalebox{0.6}{\subtable[Relative error of $v$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-12          & $0.1$             & $1.78$e+$1$ \\
-      ERK-12          & $0.01$            & $2.06$e-$1$ \\
-      ERK-12          & $0.001$           & $2.00$e-$1$ \\
+      ERK-12          & $0.1$            & $1.83$e-$7$ \\
+      ERK-12          & $0.05$           & $2.27$e-$8$ \\
+      ERK-12          & $0.02$           & $6.81$e-$9$ \\
+      ERK-12          & $0.01$           & $6.03$e-$9$ \\
       \hline
-      ERK-23          & $0.1$             & $1.67$e+$1$ \\
-      ERK-23          & $0.01$            & $2.40$e-$1$ \\
-      ERK-23          & $0.001$           & $2.01$e-$1$ \\
+      ERK-23          & $0.1$            & $4.36$e-$8$ \\
+      ERK-23          & $0.05$           & $1.09$e-$8$ \\
+      ERK-23          & $0.02$           & $1.75$e-$9$ \\
+      ERK-23          & $0.01$           & $4.37$e-$10$ \\
       \hline
-      ERK-35          & $0.1$             & $2.04$e-$1$ \\
-      ERK-35          & $0.01$            & $2.00$e-$1$ \\
-      ERK-35          & $0.001$           & $2.00$e-$1$ \\
+      ERK-35          & $0.1$            & $8.07$e-$10$ \\
+      ERK-35          & $0.05$           & $1.49$e-$11$ \\
+      ERK-35          & $0.02$           & $2.45$e-$12$ \\
+      ERK-35          & $0.01$           & $4.58$e-$13$ \\
       \hline
-      ERK-43          & $0.1$             & $2.01$e-$1$ \\
-      ERK-43          & $0.01$            & $2.00$e-$1$ \\
-      ERK-43          & $0.001$           & $2.00$e-$1$
+      ERK-43          & $0.1$            & $1.02$e-$9$ \\
+      ERK-43          & $0.05$           & $6.40$e-$11$ \\
+      ERK-43          & $0.02$           & $1.62$e-$12$ \\
+      ERK-43          & $0.01$           & $1.04$e-$13$
     \end{tabular}}}\quad
   \scalebox{0.6}{\subtable[Relative error of $w$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-12          & $0.1$             & $1.01$e+$7$ \\
-      ERK-12          & $0.01$            & $1.01$e+$5$ \\
-      ERK-12          & $0.001$           & $1.01$e+$3$ \\
+      ERK-12          & $0.1$            & $6.00$e+$3$ \\
+      ERK-12          & $0.05$           & $3.98$e+$3$ \\
+      ERK-12          & $0.02$           & $1.78$e+$3$ \\
+      ERK-12          & $0.01$           & $9.22$e+$2$ \\
+       \hline
+      ERK-23          & $0.1$            & $1.58$e+$3$ \\
+      ERK-23          & $0.05$           & $3.92$e+$2$ \\
+      ERK-23          & $0.02$           & $6.27$e+$1$ \\
+      ERK-23          & $0.01$           & $1.57$e+$1$ \\
       \hline
-      ERK-23          & $0.1$             & $1.01$e+$7$ \\
-      ERK-23          & $0.01$            & $1.01$e+$5$ \\
-      ERK-23          & $0.001$           & $1.01$e+$3$ \\
+      ERK-35          & $0.1$            & $1.85$e+$1$ \\
+      ERK-35          & $0.05$           & $2.24$e+$0$ \\
+      ERK-35          & $0.02$           & $1.40$e-$1$ \\
+      ERK-35          & $0.01$           & $1.75$e-$2$ \\
       \hline
-      ERK-35          & $0.1$             & $7.43$e+$4$ \\
-      ERK-35          & $0.01$            & $7.54$e+$2$ \\
-      ERK-35          & $0.001$           & $2.33$e+$0$ \\
-      \hline
-      ERK-43          & $0.1$             & $2.26$e+$4$ \\
-      ERK-43          & $0.01$            & $3.93$e+$0$ \\
-      ERK-43          & $0.001$           & $2.30$e+$0$
+      ERK-43          & $0.1$            & $4.40$e+$1$ \\
+      ERK-43          & $0.05$           & $2.77$e+$0$ \\
+      ERK-43          & $0.02$           & $7.11$e-$2$ \\
+      ERK-43          & $0.01$           & $4.45$e-$3$
     \end{tabular}}}\quad
   \scalebox{0.6}{\subtable[Relative error of $\phi$]{\begin{tabular}{c|c|c}
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
-      ERK-12          & $0.1$             & $7.15$e-$7$ \\
-      ERK-12          & $0.01$            & $7.13$e-$9$ \\
-      ERK-12          & $0.001$           & $8.35$e-$11$ \\
+      ERK-12          & $0.1$            & $1.14$e-$4$ \\
+      ERK-12          & $0.05$           & $5.58$e-$5$ \\
+      ERK-12          & $0.02$           & $2.24$e-$5$ \\
+      ERK-12          & $0.01$           & $1.12$e-$5$ \\
       \hline
-      ERK-23          & $0.1$             & $7.15$e-$7$ \\
-      ERK-23          & $0.01$            & $7.13$e-$9$ \\
-      ERK-23          & $0.001$           & $8.35$e-$11$ \\
+      ERK-23          & $0.1$            & $6.33$e-$7$ \\
+      ERK-23          & $0.05$           & $1.60$e-$7$ \\
+      ERK-23          & $0.02$           & $2.57$e-$8$ \\
+      ERK-23          & $0.01$           & $6.44$e-$9$ \\
       \hline
-      ERK-35          & $0.1$             & $1.46$e-$8$ \\
-      ERK-35          & $0.01$            & $4.31$e-$11$ \\
-      ERK-35          & $0.001$           & $4.11$e-$11$ \\
+      ERK-35          & $0.1$            & $1.41$e-$7$ \\
+      ERK-35          & $0.05$           & $1.76$e-$8$ \\
+      ERK-35          & $0.02$           & $1.13$e-$9$ \\
+      ERK-35          & $0.01$           & $1.41$e-$10$ \\
       \hline
-      ERK-43          & $0.1$             & $1.60$e-$9$ \\
-      ERK-43          & $0.01$            & $4.10$e-$11$ \\
-      ERK-43          & $0.001$           & $4.11$e-$11$
+      ERK-43          & $0.1$            & $2.57$e-$8$ \\
+      ERK-43          & $0.05$           & $1.62$e-$9$ \\
+      ERK-43          & $0.02$           & $4.15$e-$11$ \\
+      ERK-43          & $0.01$           & $2.59$e-$12$
     \end{tabular}}}
 \end{table}
 
@@ -620,13 +654,13 @@ limited by the accuracy of the ``truth.''
 \label{CFK:fig:convtest}
 \begin{center}
 \begin{tabular}{cc}
-\scalebox{0.15}{\includegraphics{plots/CFKu_err.png}} 
+\scalebox{0.25}{\includegraphics{plots/absu.jpg}} 
 &
-\scalebox{0.15}{\includegraphics{plots/CFKu_err_rel.png}}
+\scalebox{0.25}{\includegraphics{plots/absv.jpg}}
 \\
-\scalebox{0.15}{\includegraphics{plots/CFKv_err.png}} 
+\scalebox{0.25}{\includegraphics{plots/absw.jpg}} 
 &
-\scalebox{0.15}{\includegraphics{plots/CFKv_err_rel.png}}
+\scalebox{0.25}{\includegraphics{plots/absphi.jpg}}
 \end{tabular}
 \end{center}
 \caption{Log-log plot of errors of IFRK methods.}
@@ -636,13 +670,13 @@ limited by the accuracy of the ``truth.''
 \label{CFK:fig:convtest1}
 \begin{center}
 \begin{tabular}{cc}
-\scalebox{0.15}{\includegraphics{plots/CFKw_err.png}} 
+\scalebox{0.25}{\includegraphics{plots/relu.jpg}} 
 &
-\scalebox{0.15}{\includegraphics{plots/CFKw_err_rel.png}}
+\scalebox{0.25}{\includegraphics{plots/relv.jpg}}
 \\
-\scalebox{0.15}{\includegraphics{plots/CFKphi_err.png}} 
+\scalebox{0.25}{\includegraphics{plots/relw.jpg}} 
 &
-\scalebox{0.15}{\includegraphics{plots/CFKphi_err_rel.png}}
+\scalebox{0.25}{\includegraphics{plots/relphi.jpg}}
 \end{tabular}
 \end{center}
 \caption{Log-log plot of errors of IFRK methods, continued.}
