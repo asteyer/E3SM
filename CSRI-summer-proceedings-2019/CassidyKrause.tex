@@ -424,10 +424,14 @@ tableaux below.
 
 \section{Results}\label{CFK:sec:results}
 After implementing each of the methods described in Section 
-\ref{CFK:sec:ifrk} into HOMME-NH, we tested their convergence. For the 
-``truth'', we compared our exponential integrating factor methods to a 
-third order, five stage Ullrich method (equation $56$ in 
-\cite{CFK:Guerra2016}) with a timestep of $10^{-7}$, calculating the 
+\ref{CFK:sec:ifrk} into HOMME-NH, we tested their convergence in the 
+DCMIP2012 Test Case 4.1 (baroclinic instability test case) \cite{dcmip2012}.  We ran the
+test case for 15 days with a 300 second time-step using a trusted second order 
+implicit-explicit Runge-Kutta method to generate a nontrivial flow. The model 
+is then restarted at day 15 and integrated over a 0.1 second time-interval 
+for convergence testing.  For the ``truth'', we compared our exponential integrating 
+factor methods to a third order, five stage Ullrich method (equation $56$ in 
+\cite{CFK:Guerra2016}) with a timestep of $10^{-4}$, calculating the 
 maximum $2$-norm error over all latitudes and longitudes. To verify our 
 methods, we calculate the error of the stiff variables, $w$ and $\phi$, 
 which the matrix exponential acts upon. We also calculate the error of $u$ 
