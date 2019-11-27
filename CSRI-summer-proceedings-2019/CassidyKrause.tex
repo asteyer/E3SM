@@ -332,10 +332,10 @@ e^A &= V \exp\left(\begin{bmatrix} \lambda_1 &           &        &           \\
                                              & \lambda_2 &        &           \\
                                              &           & \ddots &           \\
                                              &           &        & \lambda_k \end{bmatrix}\right) V^{-1} \\
-  &= V \begin{bmatrix} e^\lambda_1 &             &        &             \\
-                                   & e^\lambda_2 &        &             \\
-                                   &             & \ddots &             \\
-                                   &             &        & e^\lambda_k \end{bmatrix} V^{-1}.
+  &= V \begin{bmatrix} e^{\lambda_1} &               &        &               \\
+                                     & e^{\lambda_2} &        &               \\
+                                     &               & \ddots &               \\
+                                     &               &        & e^{\lambda_k} \end{bmatrix} V^{-1}.
 \end{align*}
 Table \ref{CFK:tab:PadeError} gives the error of several diagonal $(p,q)$-
 Pad\'e approximations, for different values of $p=q$.
@@ -494,11 +494,11 @@ and the relative errors are listed in Table \ref{CFK:tab:rel_err}.
       \textbf{Method} & \textbf{$\Delta t$} & \textbf{Error}\\
       \hline
       ERK-12          & $0.1$            & $6.85$e+$0$ \\
-      ERK-12          & $0.05$           & $4.55$e-$0$ \\
-      ERK-12          & $0.02$           & $2.03$e-$0$ \\
-      ERK-12          & $0.01$           & $1.05$e-$0$ \\
+      ERK-12          & $0.05$           & $4.55$e+$0$ \\
+      ERK-12          & $0.02$           & $2.03$e+$0$ \\
+      ERK-12          & $0.01$           & $1.05$e+$0$ \\
        \hline
-      ERK-23          & $0.1$            & $1.80$e-$0$ \\
+      ERK-23          & $0.1$            & $1.80$e+$0$ \\
       ERK-23          & $0.05$           & $4.48$e-$1$ \\
       ERK-23          & $0.02$           & $7.16$e-$2$ \\
       ERK-23          & $0.01$           & $1.79$e-$2$ \\
@@ -654,36 +654,34 @@ explanation for this is that the accuracy may be limited by the accuracy of
 the matrix exponential. Another potential explanation is that we are 
 limited by the accuracy of the ``truth.'' 
 
-\begin{figure}[ht]
+\begin{figure}[h]
 \label{CFK:fig:convtest}
 \begin{center}
 \begin{tabular}{cc}
-\scalebox{0.25}{\includegraphics{plots/absu.jpg}} 
+\scalebox{0.24}{\includegraphics{plots/CFKabsu.jpg}} 
 &
-\scalebox{0.25}{\includegraphics{plots/absv.jpg}}
+\scalebox{0.24}{\includegraphics{plots/CFKabsv.jpg}}
 \\
-\scalebox{0.25}{\includegraphics{plots/absw.jpg}} 
+\scalebox{0.24}{\includegraphics{plots/CFKabsw.jpg}} 
 &
-\scalebox{0.25}{\includegraphics{plots/absphi.jpg}}
+\scalebox{0.24}{\includegraphics{plots/CFKabsphi.jpg}}
 \end{tabular}
 \end{center}
-\caption{Log-log plot of errors of IFRK methods.}
+\caption{Log-log plot of the absolute errors of IFRK methods.}
 \end{figure}
-\newpage
-\begin{figure}[ht]
-\label{CFK:fig:convtest1}
+\begin{figure}
 \begin{center}
 \begin{tabular}{cc}
-\scalebox{0.25}{\includegraphics{plots/relu.jpg}} 
+\scalebox{0.24}{\includegraphics{plots/CFKrelu.jpg}} 
 &
-\scalebox{0.25}{\includegraphics{plots/relv.jpg}}
+\scalebox{0.24}{\includegraphics{plots/CFKrelv.jpg}}
 \\
-\scalebox{0.25}{\includegraphics{plots/relw.jpg}} 
+\scalebox{0.24}{\includegraphics{plots/CFKrelw.jpg}} 
 &
-\scalebox{0.25}{\includegraphics{plots/relphi.jpg}}
+\scalebox{0.24}{\includegraphics{plots/CFKrelphi.jpg}}
 \end{tabular}
 \end{center}
-\caption{Log-log plot of errors of IFRK methods, continued.}
+\caption{Log-log plot of the relative errors of IFRK methods.}
 \end{figure}
 
 \section{Conclusions}
@@ -708,7 +706,6 @@ the IMEX RK methods that are currently implemented in HOMME-NH. In
 particular, the efficiency of the IFRK methods will depend on how large of 
 a step-size they can take, and this remains to be done.
 
-\newpage
 \bibliographystyle{siam}
 % Edit the line below to be your first and last names.
 \bibliography{CassidyKrause}
