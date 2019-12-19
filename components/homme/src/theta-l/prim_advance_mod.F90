@@ -1721,7 +1721,7 @@ contains
              elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
         do j=1,np
         do i=1,np
-           if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)) >1e-10) then
+           if (( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)) >1e-10).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING: w(n0) does not satisfy b.c.',ie,i,j,k
               write(iulog,*) 'val1 = ',temp(i,j,1)
               write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,n0)
@@ -1737,7 +1737,7 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
+           if (((phi_i(i,j,k)-phi_i(i,j,k+1)) < g).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING: before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
               write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
               write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
@@ -2277,7 +2277,7 @@ contains
              elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/g
         do j=1,np
         do i=1,np
-           if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)) >1e-10) then
+           if (( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)) >1e-10).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING: w(np1) does not satisfy b.c.',ie,i,j,k
               write(iulog,*) 'val1 = ',temp(i,j,1)
               write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,np1)
@@ -2290,7 +2290,7 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g) then
+           if (((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING: after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
               write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
               write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)

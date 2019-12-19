@@ -337,7 +337,7 @@ subroutine FColumnSolSolve(b_C, t, y_C, gamma, ierr)
   !======= Inclusions ===========
   use arkode_mod,         only: get_hvcoord_ptr, get_qn0
   use control_mod,        only: theta_hydrostatic_mode
-  use eos,                only: get_pnh_and_exner, get_dirk_jacobian
+  use eos,                only: pnh_and_exner_from_eos, get_dirk_jacobian
   use kinds,              only: real_kind
   use HommeNVector,       only: NVec_t
   use hybvcoord_mod,      only: hvcoord_t
@@ -461,7 +461,7 @@ subroutine FColumnSolSolve(b_C, t, y_C, gamma, ierr)
      phis => y%elem(ie)%state%phis(:,:)
 
      ! compute intermediate variables for Jacobian calculation
-     call get_pnh_and_exner(hvcoord, vtheta_dp, dp3d, phi_np1, &
+     call pnh_and_exner_from_eos(hvcoord, vtheta_dp, dp3d, phi_np1, &
              pnh, exner, dpnh_dp_i, pnh_i_out=pnh_i)
 
      ! compute dp3d_i -- note that compute_stage_value_dirk
