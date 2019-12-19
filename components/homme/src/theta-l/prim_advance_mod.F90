@@ -425,6 +425,7 @@ contains
   !
   ! version of prim_advance_exp which uses ARKODE for timestepping
   !
+    use imex_mod, only: compute_stage_value_dirk
     use arkode_mod,     only: parameter_list, update_arkode, get_solution_ptr, &
                               table_list, set_Butcher_tables, &
                               calc_nonlinear_stats, update_nonlinear_stats, &
@@ -1492,7 +1493,7 @@ contains
              elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
         do j=1,np
         do i=1,np
-           if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)) >1e-10) then
+           if (( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)) >1e-10).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING:CAAR w(n0) does not satisfy b.c.',ie,i,j,k
               write(iulog,*) 'val1 = ',temp(i,j,1)
               write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,n0)
@@ -1508,7 +1509,7 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
+           if (((phi_i(i,j,k)-phi_i(i,j,k+1)) < g).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING:CAAR before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
               write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
               write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
@@ -2058,7 +2059,7 @@ contains
              elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/g
         do j=1,np
         do i=1,np
-           if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)) >1e-10) then
+           if (( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)) >1e-10).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING:CAAR w(np1) does not satisfy b.c.',ie,i,j,k
               write(iulog,*) 'val1 = ',temp(i,j,1)
               write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,np1)
@@ -2071,7 +2072,7 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g) then
+           if (((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g).and.(scale3.ne.0d0)) then
               write(iulog,*) 'WARNING:CAAR after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
               write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
               write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)
@@ -2081,8 +2082,9 @@ contains
         enddo
 #endif
      endif
-     call limiter_dp3d_k(elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
-          elem(ie)%spheremp,hvcoord%dp0)
+    
+    ! call limiter_dp3d_k(elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
+    !      elem(ie)%spheremp,hvcoord%dp0)
   end do
   call t_stopf('compute_andor_apply_rhs')
 
