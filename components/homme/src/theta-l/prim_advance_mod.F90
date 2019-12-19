@@ -1479,6 +1479,34 @@ contains
   else
      nlyr_tot=5*nlev+nlevp  ! total amount of data for DSS
   endif
+
+  if ((scale1.eq.(0d0)).and.(scale2.eq.(1d0)).and.(scale3.eq.(0d0))) then
+     do ie=nets,nete
+
+       dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
+       vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+       phi_i => elem(ie)%state%phinh_i(:,:,:,n0)
+       call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,&
+             pnh,exner,dpnh_dp_i,caller = "CAAR IMP")
+
+
+#if (defined COLUMN_OPENMP)
+ !$omp parallel do private(k)                                                                                                     
+#endif
+     do k=1,nlev
+        elem(ie)%state%dp3d(:,:,k,np1) = 0d0
+        elem(ie)%state%vtheta_dp(:,:,k,np1) = 0d0
+        elem(ie)%state%w_i(:,:,k,np1)  = g*(dpnh_dp_i(:,:,k)-1d0)
+        elem(ie)%state%phinh_i(:,:,k,np1) =g*elem(ie)%state%w_i(:,:,k,n0)
+        elem(ie)%state%v(:,:,1,k,np1)  =0d0
+        elem(ie)%state%v(:,:,2,k,np1)  =0d0
+     end do
+    elem(ie)%state%w_i(:,:,nlevp,np1)  = 0d0
+    elem(ie)%state%phinh_i(:,:,nlevp,np1) =0d0
+
+     enddo
+
+else
      
   do ie=nets,nete
      dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
@@ -2086,6 +2114,8 @@ contains
     ! call limiter_dp3d_k(elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
     !      elem(ie)%spheremp,hvcoord%dp0)
   end do
+
+  endif 
   call t_stopf('compute_andor_apply_rhs')
 
   end subroutine compute_andor_apply_rhs
