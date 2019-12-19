@@ -193,7 +193,10 @@ module seq_flds_mod
   character(CXX) :: seq_flds_g2o_liq_fluxes
   character(CXX) :: seq_flds_g2o_ice_fluxes
   character(CXX) :: seq_flds_x2g_states
+  character(CXX) :: seq_flds_x2g_states_from_lnd
+  character(CXX) :: seq_flds_x2g_states_from_ocn
   character(CXX) :: seq_flds_x2g_fluxes
+  character(CXX) :: seq_flds_x2g_fluxes_from_lnd
 
   character(CXX) :: seq_flds_w2x_states
   character(CXX) :: seq_flds_w2x_fluxes
@@ -318,7 +321,10 @@ contains
     character(CXX) :: g2o_liq_fluxes = ''
     character(CXX) :: g2o_ice_fluxes = ''
     character(CXX) :: x2g_states = ''
+    character(CXX) :: x2g_states_from_lnd = ''
+    character(CXX) :: x2g_states_from_ocn = ''
     character(CXX) :: x2g_fluxes = ''
+    character(CXX) :: x2g_fluxes_from_lnd = ''
     character(CXX) :: xao_albedo = ''
     character(CXX) :: xao_states = ''
     character(CXX) :: xao_fluxes = ''
@@ -594,6 +600,7 @@ contains
     call seq_flds_add(a2x_states,"Sa_u")
     call seq_flds_add(x2l_states,"Sa_u")
     call seq_flds_add(x2i_states,"Sa_u")
+    call seq_flds_add(x2r_states,"Sa_u")
     call seq_flds_add(x2w_states,"Sa_u")
     longname = 'Zonal wind at the lowest model level'
     stdname  = 'eastward_wind'
@@ -605,6 +612,7 @@ contains
     call seq_flds_add(a2x_states,"Sa_v")
     call seq_flds_add(x2l_states,"Sa_v")
     call seq_flds_add(x2i_states,"Sa_v")
+    call seq_flds_add(x2r_states,"Sa_v")
     call seq_flds_add(x2w_states,"Sa_v")
     longname = 'Meridional wind at the lowest model level'
     stdname  = 'northward_wind'
@@ -616,6 +624,7 @@ contains
     call seq_flds_add(a2x_states,"Sa_tbot")
     call seq_flds_add(x2l_states,"Sa_tbot")
     call seq_flds_add(x2i_states,"Sa_tbot")
+    call seq_flds_add(x2r_states,"Sa_tbot")
     call seq_flds_add(x2w_states,"Sa_tbot")
     longname = 'Temperature at the lowest model level'
     stdname  = 'air_temperature'
@@ -637,6 +646,7 @@ contains
     call seq_flds_add(a2x_states,"Sa_shum")
     call seq_flds_add(x2l_states,"Sa_shum")
     call seq_flds_add(x2i_states,"Sa_shum")
+    call seq_flds_add(x2r_states,"Sa_shum")
     longname = 'Specific humidity at the lowest model level'
     stdname  = 'specific_humidity'
     units    = 'kg kg-1'
@@ -647,6 +657,7 @@ contains
     call seq_flds_add(a2x_states,"Sa_pbot")
     call seq_flds_add(x2l_states,"Sa_pbot")
     call seq_flds_add(x2i_states,"Sa_pbot")
+    call seq_flds_add(x2r_states,"Sa_pbot")
     if (trim(cime_model) == 'e3sm') then
        call seq_flds_add(x2o_states,"Sa_pbot")
     end if
@@ -721,6 +732,7 @@ contains
     call seq_flds_add(a2x_fluxes,"Faxa_lwdn")
     call seq_flds_add(x2l_fluxes,"Faxa_lwdn")
     call seq_flds_add(x2i_fluxes,"Faxa_lwdn")
+    call seq_flds_add(x2r_fluxes,"Faxa_lwdn")
     call seq_flds_add(x2o_fluxes,"Faxa_lwdn")
     longname = 'Downward longwave heat flux'
     stdname  = 'downwelling_longwave_flux'
@@ -731,6 +743,7 @@ contains
     ! direct near-infrared incident solar radiation
     call seq_flds_add(a2x_fluxes,"Faxa_swndr")
     call seq_flds_add(x2i_fluxes,"Faxa_swndr")
+    call seq_flds_add(x2r_fluxes,"Faxa_swndr")
     call seq_flds_add(x2l_fluxes,"Faxa_swndr")
     longname = 'Direct near-infrared incident solar radiation'
     stdname  = 'surface_downward_direct_shortwave_flux_due_to_near_infrared_radiation'
@@ -741,6 +754,7 @@ contains
     ! direct visible incident solar radiation
     call seq_flds_add(a2x_fluxes,"Faxa_swvdr")
     call seq_flds_add(x2i_fluxes,"Faxa_swvdr")
+    call seq_flds_add(x2r_fluxes,"Faxa_swvdr")
     call seq_flds_add(x2l_fluxes,"Faxa_swvdr")
     longname = 'Direct visible incident solar radiation'
     stdname  = 'surface_downward_direct_shortwave_flux_due_to_visible_radiation'
@@ -751,6 +765,7 @@ contains
     ! diffuse near-infrared incident solar radiation
     call seq_flds_add(a2x_fluxes,"Faxa_swndf")
     call seq_flds_add(x2i_fluxes,"Faxa_swndf")
+    call seq_flds_add(x2r_fluxes,"Faxa_swndf")
     call seq_flds_add(x2l_fluxes,"Faxa_swndf")
     longname = 'Diffuse near-infrared incident solar radiation'
     stdname  = 'surface_downward_diffuse_shortwave_flux_due_to_near_infrared_radiation'
@@ -761,6 +776,7 @@ contains
     ! diffuse visible incident solar radiation
     call seq_flds_add(a2x_fluxes,"Faxa_swvdf")
     call seq_flds_add(x2i_fluxes,"Faxa_swvdf")
+    call seq_flds_add(x2r_fluxes,"Faxa_swvdf")
     call seq_flds_add(x2l_fluxes,"Faxa_swvdf")
     longname = 'Diffuse visible incident solar radiation'
     stdname  = 'surface_downward_diffuse_shortwave_flux_due_to_visible_radiation'
@@ -1988,6 +2004,31 @@ contains
     attname  = 'Flrl_rofi'
     call metadata_set(attname, longname, stdname, units)
 
+    if (trim(cime_model) == 'e3sm') then
+       call seq_flds_add(l2x_fluxes,'Flrl_demand')
+       call seq_flds_add(x2r_fluxes,'Flrl_demand')
+       longname = 'Water flux total demand in land from rof'
+       stdname  = 'water_flux_total_demand_from_runoff'
+       units    = 'kg m-2 s-1'
+       attname  = 'Flrl_demand'
+       call metadata_set(attname, longname, stdname, units)
+    call seq_flds_add(l2x_fluxes,'Flrl_Tqsur')
+    call seq_flds_add(x2r_fluxes,'Flrl_Tqsur')
+    longname = 'Temperature of surface runoff'
+    stdname  = 'Temperature_of_surface_runoff'
+    units    = 'Kelvin'
+    attname  = 'Flrl_Tqsur'
+    call metadata_set(attname, longname, stdname, units)
+
+    call seq_flds_add(l2x_fluxes,'Flrl_Tqsub')
+    call seq_flds_add(x2r_fluxes,'Flrl_Tqsub')
+    longname = 'Temperature of subsurface runoff'
+    stdname  = 'Temperature_of_subsurface_runoff'
+    units    = 'Kelvin'
+    attname  = 'Flrl_Tqsub'
+    call metadata_set(attname, longname, stdname, units)
+    endif
+
     ! Currently only the CESM land and runoff models treat irrigation as a separate
     ! field: in E3SM, this field is folded in to the other runoff fields. Eventually,
     ! E3SM may want to update its land and runoff models to map irrigation specially, as
@@ -2068,6 +2109,15 @@ contains
     attname  = 'Flrr_volrmch'
     call metadata_set(attname, longname, stdname, units)
 
+    if (trim(cime_model) == 'e3sm') then
+       call seq_flds_add(r2x_fluxes,'Flrr_supply')
+       call seq_flds_add(x2l_fluxes,'Flrr_supply')
+       longname = 'River model supply for land use'
+       stdname  = 'rtm_supply'
+       units    = 'kg m-2 s-1'
+       attname  = 'Flrr_supply'
+       call metadata_set(attname, longname, stdname, units)
+    endif
     !-----------------------------
     ! wav->ocn and ocn->wav
     !-----------------------------
@@ -2297,6 +2347,9 @@ contains
     call seq_flds_add(g2x_states_to_lnd,trim(name))
     call seq_flds_add(x2l_states,trim(name))
     call seq_flds_add(x2l_states_from_glc,trim(name))
+    if (trim(cime_model) == 'e3sm') then
+       call seq_flds_add(x2o_states,trim(name))
+    endif
     longname = 'Ice sheet grid coverage on global grid'
     stdname  = 'ice_sheet_grid_mask'
     units    = '1'
@@ -2334,6 +2387,7 @@ contains
     call set_glc_elevclass_field(name, attname, longname, stdname, units, l2x_fluxes_to_glc, &
          additional_list = .true.)
     call seq_flds_add(x2g_fluxes,trim(name))
+    call seq_flds_add(x2g_fluxes_from_lnd,trim(name))
     call metadata_set(attname, longname, stdname, units)
 
     name = 'Sl_tsrf'
@@ -2345,6 +2399,7 @@ contains
     call set_glc_elevclass_field(name, attname, longname, stdname, units, l2x_states_to_glc, &
          additional_list = .true.)
     call seq_flds_add(x2g_states,trim(name))
+    call seq_flds_add(x2g_states_from_lnd,trim(name))
     call metadata_set(attname, longname, stdname, units)
 
     ! Sl_topo is sent from lnd -> cpl, but is NOT sent to glc (it is only used for the
@@ -2398,6 +2453,155 @@ contains
     call set_glc_elevclass_field(name, attname, longname, stdname, units, x2l_fluxes)
     call set_glc_elevclass_field(name, attname, longname, stdname, units, x2l_fluxes_from_glc, &
          additional_list = .true.)
+
+    if (trim(cime_model) == 'e3sm') then
+       name = 'So_blt'
+       call seq_flds_add(o2x_states,trim(name))
+       call seq_flds_add(x2g_states,trim(name))
+       call seq_flds_add(x2g_states_from_ocn,trim(name))
+       longname = 'Ice shelf boundary layer ocean temperature'
+       stdname  = 'Ice_shelf_boundary_layer_ocean_temperature'
+       units    = 'C'
+       attname  = 'So_blt'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'So_bls'
+       call seq_flds_add(o2x_states,trim(name))
+       call seq_flds_add(x2g_states,trim(name))
+       call seq_flds_add(x2g_states_from_ocn,trim(name))
+       longname = 'Ice shelf boundary layer ocean salinity'
+       stdname  = 'Ice_shelf_boundary_layer_ocean_salinity'
+       units    = 'psu'
+       attname  = 'So_bls'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'So_htv'
+       call seq_flds_add(o2x_states,trim(name))
+       call seq_flds_add(x2g_states,trim(name))
+       call seq_flds_add(x2g_states_from_ocn,trim(name))
+       longname = 'Ice shelf ocean heat transfer velocity'
+       stdname  = 'Ice_shelf_ocean_heat_transfer_velocity'
+       units    = 'm/s'
+       attname  = 'So_htv'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'So_stv'
+       call seq_flds_add(o2x_states,trim(name))
+       call seq_flds_add(x2g_states,trim(name))
+       call seq_flds_add(x2g_states_from_ocn,trim(name))
+       longname = 'Ice shelf ocean salinity transfer velocity'
+       stdname  = 'Ice_shelf_ocean_salinity_transfer_velocity'
+       units    = 'm/s'
+       attname  = 'So_stv'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'So_rhoeff'
+       call seq_flds_add(o2x_states,trim(name))
+       call seq_flds_add(x2g_states,trim(name))
+       call seq_flds_add(x2g_states_from_ocn,trim(name))
+       longname = 'Ocean effective pressure'
+       stdname  = 'Ocean_effective_pressure'
+       units    = 'Pa'
+       attname  = 'So_rhoeff'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Fogx_qicelo'
+       call seq_flds_add(g2x_fluxes,trim(name))
+       call seq_flds_add(x2o_fluxes,trim(name))
+       longname = 'Subshelf liquid flux for ocean'
+       stdname  = 'Subshelf_liquid_flux_for_ocean'
+       units    = 'kg m-2 s-1'
+       attname  = 'Fogx_qicelo'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Fogx_qiceho'
+       call seq_flds_add(g2x_fluxes,trim(name))
+       call seq_flds_add(x2o_fluxes,trim(name))
+       longname = 'Subshelf heat flux for the ocean'
+       stdname  = 'Subshelf_heat_flux_for_the_ocean'
+       units    = 'W m-2'
+       attname  = 'Fogx_qiceho'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Sg_blit'
+       call seq_flds_add(g2x_states,trim(name))
+       call seq_flds_add(x2o_states,trim(name))
+       longname = 'Boundary layer interface temperature for ocean'
+       stdname  = 'Boundary_layer_interface_temperature_for_ocean'
+       units    = 'C'
+       attname  = 'Sg_blit'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Sg_blis'
+       call seq_flds_add(g2x_states,trim(name))
+       call seq_flds_add(x2o_states,trim(name))
+       longname = 'Boundary layer interface salinity for ocean'
+       stdname  = 'Boundary_layer_interface_salinity_for_ocean'
+       units    = 'psu'
+       attname  = 'Sg_blis'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Sg_lithop'
+       call seq_flds_add(g2x_states,trim(name))
+       call seq_flds_add(x2o_states,trim(name))
+       longname = 'Ice sheet lithostatic pressure'
+       stdname  = 'Ice_sheet_lithostatic_pressure'
+       units    = 'Pa'
+       attname  = 'Sg_lithop'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Sg_icemask_grounded'
+       call seq_flds_add(g2x_states,trim(name))
+       call seq_flds_add(x2o_states,trim(name))
+       longname = 'Grounded ice mask'
+       stdname  = 'Grounded_ice_mask'
+       units    = 'unitless'
+       attname  = 'Sg_icemask_grounded'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Sg_icemask_floating'
+       call seq_flds_add(g2x_states,trim(name))
+       call seq_flds_add(x2o_states,trim(name))
+       longname = 'Floating ice mask'
+       stdname  = 'Floating_ice_mask'
+       units    = 'unitless'
+       attname  = 'Sg_icemask_floating'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Sg_tbot'
+       call seq_flds_add(g2x_states,trim(name))
+       call seq_flds_add(x2o_states,trim(name))
+       longname = 'Bottom layer ice temperature'
+       stdname  = 'Bottom_layer_ice_temperature'
+       units    = 'C'
+       attname  = 'Sg_tbot'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Sg_dztbot'
+       call seq_flds_add(g2x_states,trim(name))
+       call seq_flds_add(x2o_states,trim(name))
+       longname = 'Bottom layer ice layer half thickness'
+       stdname  = 'Bottom_layer_ice_layer_half_thickness'
+       units    = 'm'
+       attname  = 'Sg_dztbot'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Fogx_qiceli'
+       call seq_flds_add(x2g_fluxes,trim(name))
+       longname = 'Subshelf mass flux for ice sheet'
+       stdname  = 'Subshelf_mass_flux_for_ice_sheet'
+       units    = 'kg m-2 s-1'
+       attname  = 'Fogx_qiceli'
+       call metadata_set(attname, longname, stdname, units)
+
+       name = 'Fogx_qicehi'
+       call seq_flds_add(x2g_fluxes,trim(name))
+       longname = 'Subshelf heat flux for ice sheet'
+       stdname  = 'Subshelf_heat_flux_for_ice_sheet'
+       units    = 'W m-2'
+       attname  = 'Fogx_qicehi'
+       call metadata_set(attname, longname, stdname, units)
+    endif
 
     ! Done glc fields
 
@@ -3224,6 +3428,8 @@ contains
     seq_flds_g2x_states = trim(g2x_states)
     seq_flds_g2x_states_to_lnd = trim(g2x_states_to_lnd)
     seq_flds_x2g_states = trim(x2g_states)
+    seq_flds_x2g_states_from_lnd = trim(x2g_states_from_lnd)
+    seq_flds_x2g_states_from_ocn = trim(x2g_states_from_ocn)
     seq_flds_xao_states = trim(xao_states)
     seq_flds_xao_albedo = trim(xao_albedo)
     seq_flds_xao_diurnl = trim(xao_diurnl)
@@ -3248,6 +3454,7 @@ contains
     seq_flds_g2o_liq_fluxes = trim(g2o_liq_fluxes)
     seq_flds_g2o_ice_fluxes = trim(g2o_ice_fluxes)
     seq_flds_x2g_fluxes = trim(x2g_fluxes)
+    seq_flds_x2g_fluxes_from_lnd = trim(x2g_fluxes_from_lnd)
     seq_flds_xao_fluxes = trim(xao_fluxes)
     seq_flds_r2x_fluxes = trim(r2x_fluxes)
     seq_flds_x2r_fluxes = trim(x2r_fluxes)
