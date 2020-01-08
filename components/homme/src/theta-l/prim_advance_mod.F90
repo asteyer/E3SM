@@ -787,35 +787,46 @@ contains
     else if (tstep_type==31) then ! ARKode Conde et al ssp3(3,3,3)b (renamed here)
       call set_Butcher_tables(arkode_parameters, arkode_tables%SSP3333C)
 
-    else if (tstep_type==32) then ! ARKode IMKG 2nd-order, 4 stage (2 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG232)
+    else if (tstep_type==32) then ! ARKode IMKG1 2nd-order, 4 stage (2 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_232)
 
-    else if (tstep_type==33) then ! ARKode IMKG 2nd-order, 5 stage (2 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG242)
+    else if (tstep_type==33) then ! ARKode IMKG1 2nd-order, 5 stage (2 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_242)
 
-    else if (tstep_type==34) then ! ARKode IMKG 2nd-order, 5 stage (3 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG243)
+    else if (tstep_type==34) then ! ARKode IMKG1 2nd-order, 5 stage (3 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_243)
 
-    else if (tstep_type==35) then ! ARKode IMKG 2nd-order, 6 stage (2 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG252)
+    else if (tstep_type==35) then ! ARKode IMKG1 2nd-order, 6 stage (2 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_252)
 
-    else if (tstep_type==36) then ! ARKode IMKG 2nd-order, 6 stage (3 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG253)
+    else if (tstep_type==36) then ! ARKode IMKG1 2nd-order, 6 stage (3 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_253)
 
-    else if (tstep_type==37) then ! ARKode IMKG 2nd-order, 6 stage (4 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG254)
+    else if (tstep_type==37) then ! ARKode IMKG1 2nd-order, 6 stage (4 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_254)
 
-    else if (tstep_type==38) then ! ARKode IMKG 3rd-order, 5 stage (2 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG342)
+    else if (tstep_type==38) then ! ARKode IMKG1 3rd-order, 5 stage (2 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_342)
 
-    else if (tstep_type==39) then ! ARKode IMKG 3rd-order, 5 stage (3 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG343)
+    else if (tstep_type==39) then ! ARKode IMKG1 3rd-order, 5 stage (3 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_343)
 
-    else if (tstep_type==40) then ! ARKode IMKG 3rd-order, 6 stage (3 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG353)
+    else if (tstep_type==40) then ! ARKode IMKG1 3rd-order, 6 stage (3 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_353)
 
-    else if (tstep_type==41) then ! ARKode IMKG 3rd-order, 6 stage (4 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG354)
+    else if (tstep_type==41) then ! ARKode IMKG1 3rd-order, 6 stage (4 implicit)
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG1_354)
+
+    else if (tstep_type==42) then ! ARKode IMKG2 2nd order, 6 stage
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG2_254a)
+
+    else if (tstep_type==43) then ! ARKODE IMKG2 2nd order, 3rd order explicit table, 6 stage
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG2_254b)
+
+    else if (tstep_type==44) then ! ARKODE IMKG2 2nd order, 5 stage
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG2_243)
+
+
 
     else 
        call abortmp('ERROR: bad choice of tstep_type')
