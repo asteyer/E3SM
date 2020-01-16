@@ -826,6 +826,12 @@ contains
     else if (tstep_type==44) then ! ARKODE IMKG2 2nd order, 5 stage
       call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG2_243)
 
+    else if (tstep_type==45) then ! Strang carryover
+      call set_Butcher_tables(arkode_parameters, arkode_tables%strangcarryover)
+
+    else if (tstep_type==46) then ! ARK2 NUMA                                                      
+      call set_Butcher_tables(arkode_parameters, arkode_tables%ARK2_NUMA)
+
 
 
     else 
@@ -1102,12 +1108,12 @@ contains
         do k=1,nlev
            k2=min(k+1,nlev)
            if (theta_hydrostatic_mode) then
-              heating(:,:,k)= (elem(ie)%state%v(:,:,1,k,nt)*vtens(:,:,1,k,ie) + &
+              heating(:,:,k)= 0d0*(elem(ie)%state%v(:,:,1,k,nt)*vtens(:,:,1,k,ie) + &
                    elem(ie)%state%v(:,:,2,k,nt)*vtens(:,:,2,k,ie) ) / &
                    (exner(:,:,k)*Cp)
 
            else
-              heating(:,:,k)= (elem(ie)%state%v(:,:,1,k,nt)*vtens(:,:,1,k,ie) + &
+              heating(:,:,k)= 0d0*(elem(ie)%state%v(:,:,1,k,nt)*vtens(:,:,1,k,ie) + &
                    elem(ie)%state%v(:,:,2,k,nt)*vtens(:,:,2,k,ie)  +&
                    (elem(ie)%state%w_i(:,:,k,nt)*stens(:,:,k,3,ie)  +&
                      elem(ie)%state%w_i(:,:,k2,nt)*stens(:,:,k2,3,ie))/2 ) /  &
@@ -1117,7 +1123,7 @@ contains
            !     +stens(:,:,k,2,ie)*hvcoord%dp0(k)*exner0(k)/(exner(:,:,k)*elem(ie)%state%dp3d(:,:,k,nt)&
            !     )  -heating(:,:,k)
            elem(ie)%state%vtheta_dp(:,:,k,nt)=elem(ie)%state%vtheta_dp(:,:,k,nt) &
-                  -heating(:,:,k)
+                  -0d0*heating(:,:,k)
         enddo
 #endif
 
