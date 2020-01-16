@@ -100,6 +100,7 @@ contains
                                 stage4(nets:nete,np,np,nlevp,6)
     real (kind=real_kind) :: a21,a32,a43,a54,a65,a61,c2,c3,c4,c5,b1,b2,b3,b4
     real (kind=real_kind) :: wphivec(2*nlev)
+    real (kind=real_kind) :: Lu(2*nlev)
     real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
     real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
     real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
@@ -1075,6 +1076,77 @@ contains
 
 
 !!==========================================================================================================
+    elseif (tstep_type == 22) then ! Second order ETD Method reformulated for efficiency
+      c2 = 3.d0/4.d0
+
+      ! Compute JacL, JacD, and JacU
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+
+      ! Stage1 = u_m is in n0
+      ! Calculate for stage values: L_mu_m
+      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,n0,nets,nete,Lu)
+
+      ! Calculate Stage2 = u_m + c2dt*phi1(c2dtL)(N(u_m;t_m) + L_mu_m)
+      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
+      call add_Lu(elem,np1,Lu,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
+
+      ! Calculate Stage3 = u_m + dt[phi1(dtL)(N(u_m;t_m)+L_mu_m)-1/c2phi2(dtL)(N(u_m;t_m)+L_mu_m)
+      !                             +1/c2phi2(dtL)(N(Stage2;tm+c2dt)+L_mu_m)]
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
+      call add_Lu(elem,np1,Lu,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
+      call linear_combination_of_elem(np1,dt/c2,np1,0.d0,n0,elem,nets,nete) ! dt/c2phi2(dtL)(N(Stage2;tm+c2dt)+Lu) is in np1
+
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call add_Lu(elem,nm1,Lu,nets,nete) 
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,-dt/c2,nm1,1.d0,np1,elem,nets,nete) !Last two terms stored in np1
+
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call add_Lu(elem,nm1,Lu,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,dt,nm1,1.d0,np1,elem,nets,nete) ! Last three terms stored in np1
+
+      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)  ! Stage 3 stored in np1
+
+
+      ! Calculate ump1 = u_m + dt[phi1(dtL)(N(um;tm)+L_mu_m)-phi2(dtL)(N(um;tm)+L_mu_m)+phi2(dtL)(N(Stage3;tm+dt)+L_mu_m)]
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
+      call add_Lu(elem,np1,Lu,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete) ! Last term stored in np1
+
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call add_Lu(elem,nm1,Lu,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,dt,np1,dt,nm1,elem,nets,nete) ! Second and last terms stored in np1
+
+      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call add_Lu(elem,nm1,Lu,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,-dt,nm1,elem,nets,nete)  ! Last three terms stored in np1
+
+      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
+
+!!==========================================================================================================
+
 
 
  !==========================================================================================================
@@ -3556,5 +3628,66 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
     end do
   end if
   end subroutine phi_func_update_elem
+!=================================================================================================
+! Subroutine getLu calculates the Jacobian L_m and multiplies it by u_m. The
+! product is stored and returned in the vector Lu 
+!=================================================================================================
+  subroutine getLu(JacL_elem,JacD_elem,JacU_elem,elem,n0,nets,nete,Lu)
+  real (kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),&
+       JacU_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1)
+  type (element_t), intent(inout), target :: elem(:)
+  integer, intent(in) :: n0,nets,nete
+  real (kind=real_kind), intent(out) :: Lu(2*nlev,np,np,nete-nets+1)
+
+  ! Local variables
+  integer :: ie,i,j,k
+  real (kind=real_kind) :: Jac(2*nlev,2*nlev) 
+
+  do ie = nets,nete
+    do i = 1,np
+      do j = 1,np
+        Jac = 0.d0
+        do k = 1,(nlev-1)
+          Jac(k,(k+nlev)) = JacD_elem(k,i,j,ie)
+          Jac(k,(k+1+nlev)) = JacU_elem(k,i,j,ie)
+          Jac((k+1),(k+nlev)) = JacL_elem(k,i,j,ie) 
+        end do
+        Jac(nlev, 2*nlev) = JacD_elem(nlev,i,j,ie)
+        do k = 1,nlev
+          Jac(k + nlev,k) = 1.d0
+        end do
+        Jac = Jac * g 
+
+        Lu(1:nlev,i,j,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+        Lu(1+nlev:2*nlev,i,j,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
+        Lu(:,i,j,ie) = matmul(Jac,Lu(:,i,j,ie))
+      end do
+    end do
+  end do
+
+  end subroutine getLu
+!===================================================================
+! The subroutine add_Lu updates the state variables  
+!   by adding Lu to w and phi
+! 
+!=====================================================================
+  subroutine add_Lu(elem,n0,Lu,nets,nete)
+  type(element_t), intent(inout)   :: elem(:)
+  real(kind=real_kind), intent(in) :: Lu(2*nlev)
+  integer, intent(in)              :: nets,nete,n0
+  ! local variables
+  integer :: ie,i,j
+ 
+  ! update w and phi with the action of phi_func
+  do ie = nets,nete 
+    do i = 1,np
+      do j = 1,np
+        elem(ie)%state%w_i(i,j,1:nlev,n0)     = elem(ie)%state%w_i(i,j,1:nlev,n0) + Lu(1:nlev)
+        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = elem(ie)%state%phinh_i(i,j,1:nlev,n0) + Lu(nlev+1:2*nlev)
+      end do
+    end do
+  end do
+  end subroutine add_Lu
+!=================================================================================================
 
 end module prim_advance_mod
