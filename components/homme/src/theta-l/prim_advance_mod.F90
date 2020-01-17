@@ -100,7 +100,7 @@ contains
                                 stage4(nets:nete,np,np,nlevp,6)
     real (kind=real_kind) :: a21,a32,a43,a54,a65,a61,c2,c3,c4,c5,b1,b2,b3,b4
     real (kind=real_kind) :: wphivec(2*nlev)
-    real (kind=real_kind) :: Lu(2*nlev)
+    real (kind=real_kind) :: Lu(2*nlev,np,np,nete-nets+1)
     real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
     real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
     real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
