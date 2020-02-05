@@ -26,9 +26,10 @@
 #define IMKG1_354_ARK 22
 #define IMKG2_254a_ARK 23  
 #define IMKG2_254b_ARK 24
-#define IMKG2_243_ARK 25
-#define ARK2_NUMA_ARK 26
-#define strangcarryover_ARK 27
+#define IMKG2_266_ARK 25
+#define IMKG2_243_ARK 26
+#define ARK2_NUMA_ARK 27
+#define strangcarryover_ARK 28
 
 
 
@@ -85,6 +86,7 @@ module arkode_mod
     integer :: IMKG1_354  = IMKG1_353_ARK
     integer :: IMKG2_254a  = IMKG2_254a_ARK
     integer :: IMKG2_254b  = IMKG2_254b_ARK
+    integer :: IMKG2_266  = IMKG2_266_ARK
     integer :: IMKG2_243   = IMKG2_243_ARK
     integer :: ARK2_NUMA   = ARK2_NUMA_ARK
     integer :: strangcarryover = strangcarryover_ARK
@@ -1287,6 +1289,35 @@ contains
         ap%ce(1:2) = (/ 0.d0, 2d0-sqrt(2d0)/)
         ap%be(1:3) =  (/ 1d0/(2d0*sqrt(2d0)), 1d0/(2d0*sqrt(2d0)), 1d0 -1d0/sqrt(2d0) /)
 
+      case (IMKG2_266_ARK)
+        ap%imex = 2 ! imex                                                                                                                    
+        ap%s = 7 ! 3 stage                                                                                                                    
+        ap%q = 2 ! 3rd order                                                                                                                  
+        ap%p = 0 ! no embedded order                                                                                                          
+        ap%be2 = 0.d0 ! no embedded explicit method                                                                                           
+        ! Implicit Butcher Table (matrix)                                                                                                     
+        ap%Ai(1:7,1:7) = 0d0
+        ap%Ai(2,1:2) = (/ 0d0, 1d0/6d0 /)
+        ap%Ai(3,1:3) = (/ 0d0, 0d0, 2d0/15d0 /)
+        ap%Ai(4,1:4) = (/ 0d0, 0d0, 0d0, 1d0/4d0 /)
+        ap%Ai(5,1:5) = (/ 0d0, 0d0, 0d0, 0d0, 1d0/3d0 /)
+        ap%Ai(6,1:6) = (/ 0d0, 0d0, 0d0, 0d0, 0d0, 1d0/2d0 /)
+        ap%Ai(7,1:7) = (/ 3d0/11d0, 3d0/11d0 ,0d0, 0d0, 0d0, 0d0, 5d0/11d0 /)
+        ! Implicit Butcher Table (vectors)                                                                                                    
+        ap%ci(1:7) = (/ 0d0,1d0/6d0,1d0/3d0, 1d0/4d0, 1d0/3d0, 1d0/2d0,  1d0 /)
+        ap%bi(1:7) = ap%Ai(7,1:7)
+        ! Explicit Butcher Table (matrix)                                                                                                     
+        ap%Ae(1:7,1:7) = 0d0
+        ap%Ae(2,1:2) = (/  1d0/6d0 ,0d0 /)
+        ap%Ae(3,1:3) = (/ 0d0, 2d0/15d0, 0d0/)
+        ap%Ae(4,1:4) = (/ 0d0, 0d0, 1d0/4d0,0d0 /)
+        ap%Ae(5,1:5) = (/ 0d0, 0d0, 0d0, 1d0/3d0 ,0d0/)
+        ap%Ae(6,1:6) = (/ 0d0, 0d0, 0d0, 0d0,1d0/2d0,0d0 /)
+        ap%Ae(7,1:7) = (/ 0d0,0d0 , 0d0, 0d0,0d0, 1d0, 0d0 /)
+        ! Explicit Butcher Table (vectors)                                                                                                    
+        ap%ce(1:7) =  (/ 0d0,1d0/6d0,1d0/3d0, 1d0/4d0, 1d0/3d0, 1d0/2d0,  1d0 /)
+        ap%be(1:7) = (/ 0d0,0d0 , 0d0, 0d0,0d0, 1d0, 0d0 /)
+ 
 
 
 

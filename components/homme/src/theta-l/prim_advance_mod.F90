@@ -832,6 +832,8 @@ contains
     else if (tstep_type==46) then ! ARK2 NUMA                                                      
       call set_Butcher_tables(arkode_parameters, arkode_tables%ARK2_NUMA)
 
+    else if (tstep_type==47) then ! ARK2 NUMA                                                                                                 
+      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG2_266)
 
 
     else 
