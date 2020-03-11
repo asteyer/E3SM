@@ -3128,17 +3128,7 @@ contains
   pfac = 1.d0/gamma(dble(p+q+1.d0))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
-  Jac = 0.d0
-  do i = 1,(dimDiag-1)
-    Jac(i,(i+dimDiag)) = JacD(i)
-    Jac(i,(i+1+dimDiag)) = JacU(i)
-    Jac((i+1),(i+dimDiag)) = JacL(i) 
-  end do
-  Jac(dimDiag, dimJac) = JacD(dimDiag)
-  do i = 1,dimDiag
-    Jac(i + dimDiag,i) = 1.d0
-  end do
-  Jac = Jac * g * dt
+  call formJac(JacL,JacD,JacU,dt,Jac)
   if (neg) then
     Jac = (-1.d0)*Jac 
   end if
@@ -3546,88 +3536,71 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
 
   ! local variables
   real(kind=real_kind)  :: Jac(2*nlev,2*nlev),JInv(2*nlev,2*nlev),expJ(2*nlev,2*nlev),&
-      wphivec(2*nlev),c(2*nlev), phi_k(2*nlev,np,np,nete-nets+1)
-  integer               :: i,j,k,ie,info,dimJac
+      wphivec(2*nlev),c(2*nlev), phi_k(2*nlev)
+  integer               :: i,j,k,ie,info
   integer               :: ipiv(nlev)
   complex(kind=8)       :: work(nlev)
   
   do ie = nets, nete
     do i = 1,np
       do j = 1,np
-        ! Form Jacobian
-        dimJac = 2*nlev
-        Jac = 0.d0
-        do k = 1,(nlev-1)
-          Jac(k,(k+nlev))     = JacD_elem(k,i,j,ie)
-          Jac(k,(k+1+nlev))   = JacU_elem(k,i,j,ie)
-          Jac((k+1),(k+nlev)) = JacL_elem(k,i,j,ie)
-        end do
-        Jac(nlev, dimJac)     = JacD_elem(nlev,i,j,ie)
-        do k = 1,nlev
-          Jac(k + nlev,k) = 1.d0
-        end do
-        Jac = Jac * g * dt
-
-        ! Calculate Jac^(-1) for later
-        JInv = Jac
-        work = 0.d0
-        ipiv = 0
-        call DGETRF(dimJac, dimJac, JInv, dimJac, ipiv, info)
-        call DGETRI(dimJac, JInv, dimJac, ipiv, work, dimJac, info)
         wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,n0)
         wphivec(nlev+1:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        c = wphivec
-        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),.false.,nlev,dt,expJ,c)
-        c = c - wphivec
-        phi_k(:,i,j,ie) = matmul(JInv,c) 
-        ! calculate phi_k recursively
-        if (deg .gt. 2) then
-          do k = 2,deg
-            phi_k(:,i,j,ie) = phi_k(:,i,j,ie) - 1/gamma(dble(k))*wphivec
-            phi_k(:,i,j,ie) = matmul(JInv,phi_k(:,i,j,ie))
-          end do
-        end if
+        call phi_func(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),dt,deg,wphivec,phi_k)
+        ! update w and phi
+        elem(ie)%state%w_i(i,j,1:nlev,n0)     = phi_k(1:nlev)
+        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = phi_k(nlev+1:2*nlev)
       end do
     end do
-  end do
-  call phi_func_update_elem(elem,n0,phi_k,deg,nets,nete)
-  end subroutine apply_phi_func
-
-!===================================================================
-! The subroutine phi_func_update_elem updates the state variables  
-!   under the action of a phi function. 
-! 
-! The variables w and phi are updated directly with phi_k. 
-! Because of the structure of the Jacobian, the other variables are 
-!   modified by the scalar coming from the first term of the series for
-!   phi_k
-!=====================================================================
-  subroutine phi_func_update_elem(elem,n0,phifunc,deg,nets,nete)
-  type(element_t), intent(inout)   :: elem(:)
-  real(kind=real_kind), intent(in) :: phifunc(2*nlev,np,np,nete-nets+1)
-  integer, intent(in)              :: nets,nete,n0,deg
-  ! local variables
-  integer :: ie,i,j
- 
-  ! update w and phi with the action of phi_func
-  do ie = nets,nete 
-    do i = 1,np
-      do j = 1,np
-        elem(ie)%state%w_i(i,j,1:nlev,n0)     = phifunc(1:nlev,i,j,ie)
-        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = phifunc(nlev+1:2*nlev,i,j,ie)
-      end do
-    end do
-  end do
-  ! update the other variables with the coefficient from the first term of phi_k
-  if (deg .gt. 1) then
-    do ie = nets,nete 
+    if (deg .gt. 1) then ! update other variables
       elem(ie)%state%v(:,:,1,:,n0)       = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%v(:,:,1,:,n0)
       elem(ie)%state%v(:,:,2,:,n0)       = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%v(:,:,2,:,n0)
       elem(ie)%state%vtheta_dp(:,:,:,n0) = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%vtheta_dp(:,:,:,n0)
       elem(ie)%state%dp3d(:,:,:,n0)      = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%dp3d(:,:,:,n0)
+    end if
+  end do
+  end subroutine apply_phi_func
+
+!============================================================================
+! This subroutine calculates the phi function phi_k(Ldt) and applies it
+! to a vector c.
+!============================================================================
+  subroutine phi_func(JacL,JacD,JacU,dt,deg,wphivec,phi_k)
+
+  real(kind=real_kind), intent(in)  :: JacL(nlev-1),&
+       JacD(nlev),JacU(nlev-1),dt,wphivec(2*nlev)
+  real(kind=real_kind), intent(out) :: phi_k(2*nlev)
+  integer, intent(in)               :: deg
+
+  ! local variables
+  real(kind=real_kind)  :: Jac(2*nlev,2*nlev),JInv(2*nlev,2*nlev),expJ(2*nlev,2*nlev),&
+      c(2*nlev)
+  integer               :: k,info
+  integer               :: ipiv(nlev)
+  complex(kind=8)       :: work(nlev)
+  
+  call formJac(JacL,JacD,JacU,dt,Jac)
+  ! Calculate Jac^(-1) for later
+  JInv = Jac
+  work = 0.d0
+  ipiv = 0
+  call DGETRF(2*nlev, 2*nlev, JInv, 2*nlev, ipiv, info)
+  call DGETRI(2*nlev, JInv, 2*nlev, ipiv, work, 2*nlev, info)
+
+  c = wphivec
+  call matrix_exponential(JacL,JacD,JacU,.false.,nlev,dt,expJ,c)
+  c = c - wphivec
+  phi_k = matmul(JInv,c) 
+  ! calculate phi_k recursively
+  if (deg .ge. 2) then
+    do k = 2,deg
+      phi_k = phi_k - 1/gamma(dble(k))*wphivec
+      phi_k = matmul(JInv,phi_k)
     end do
   end if
-  end subroutine phi_func_update_elem
+  end subroutine phi_func
+
+
 !=================================================================================================
 ! Subroutine getLu calculates the Jacobian L_m and multiplies it by u_m. The
 ! product is stored and returned in the vector Lu 
@@ -3646,17 +3619,7 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
   do ie = nets,nete
     do i = 1,np
       do j = 1,np
-        Jac = 0.d0
-        do k = 1,(nlev-1)
-          Jac(k,(k+nlev)) = JacD_elem(k,i,j,ie)
-          Jac(k,(k+1+nlev)) = JacU_elem(k,i,j,ie)
-          Jac((k+1),(k+nlev)) = JacL_elem(k,i,j,ie) 
-        end do
-        Jac(nlev, 2*nlev) = JacD_elem(nlev,i,j,ie)
-        do k = 1,nlev
-          Jac(k + nlev,k) = 1.d0
-        end do
-        Jac = Jac * g 
+        call formJac(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),1.d0,Jac)
 
         Lu(1:nlev,i,j,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
         Lu(1+nlev:2*nlev,i,j,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
@@ -3689,5 +3652,31 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
   end do
   end subroutine add_Lu
 !=================================================================================================
+
+!=============================================================================
+! formJac forms the actual matrix of the Jacobian
+! Inputs: vectors for the lower, main, and upper diagonals; dt
+! Outputs: Jac
+!=============================================================================
+  subroutine formJac(JacL,JacD,JacU,dt,Jac)
+  real(kind=real_kind), intent(in)  :: JacL(nlev-1),JacD(nlev),JacU(nlev-1),dt
+  real(kind=real_kind), intent(out) :: Jac(2*nlev,2*nlev)
+  ! local variables
+  integer :: k,dimJac
+
+  ! Form Jacobian
+  dimJac = 2*nlev
+  Jac = 0.d0
+  do k = 1,(nlev-1)
+    Jac(k,(k+nlev))     = JacD(k)
+    Jac(k,(k+1+nlev))   = JacU(k)
+    Jac((k+1),(k+nlev)) = JacL(k)
+  end do
+  Jac(nlev, dimJac)     = JacD(nlev)
+  do k = 1,nlev
+    Jac(k + nlev,k) = 1.d0
+  end do
+  Jac = Jac * g * dt
+  end subroutine formJac
 
 end module prim_advance_mod
