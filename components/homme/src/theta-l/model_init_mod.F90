@@ -19,7 +19,7 @@ module model_init_mod
   use hybrid_mod,         only: hybrid_t
   use dimensions_mod,     only: np,nlev,nlevp
   use eos          ,      only: pnh_and_exner_from_eos,get_dirk_jacobian
-  use prim_advance_mod,   only: matrix_exponential, matrix_exponential2
+  use prim_advance_mod,   only: matrix_exponential, matrix_exponential2,phi_func
   use element_state,      only: timelevels, nu_scale_top
   use viscosity_mod,      only: make_c0_vector
   use kinds,              only: real_kind,iulog
@@ -76,6 +76,10 @@ contains
     ! unit test for mat_exp accuracy
     call test_matrix_exponential_accuracy(hybrid)
     ! 
+
+    ! unit test for phi functions
+    call test_phifunc(hybrid)
+
     ! compute scaling of sponge layer damping 
     !
     if (hybrid%masterthread) write(iulog,*) "sponge layer nu_top viscosity scaling factor"
@@ -515,9 +519,94 @@ contains
     end if
   end subroutine test_matrix_exponential_accuracy
 
+  subroutine test_phifunc(hybrid)
+  ! the following code tests the phi functions
+  type(hybrid_t), intent(in) :: hybrid
 
+  ! local
+  real (kind=real_kind) :: approxphi1(40), approxphi2(40),&
+      exactphi1(40), exactphi2(40),wphivec(40)
+  real (kind=real_kind) :: JacL(19), JacU(19), JacD(20)
+  real (kind = real_kind) :: phi1_err, phi2_err
 
+  if (hybrid%masterthread) write(iulog,*)'Running phi function unit test...'
 
+  wphivec = 1.d0
+
+  JacL = (/ 3.757951454493374d-3, 3.819276450619194d-3, 3.880299668323407d-3,&
+     3.941024255519856d-3, 4.001453427054409d-3, 4.061590011618724d-3,&
+     4.121436472079190d-3, 4.180994935960876d-3, 4.240267208588646d-3,&
+     4.299254777865632d-3, 4.357958817789391d-3, 4.416380194910784d-3,&
+     4.474519480093797d-3, 4.532376966683320d-3, 4.589952695389095d-3,&
+     4.647246485637452d-3, 4.704257972792853d-3, 4.760986650405008d-3,&
+     4.817431916249652d-3/)
+
+  JacD = (/-7.738077153201838d-3, -7.801334908243546d-3,&
+     -7.923983063331936d-3, -8.046030284613884d-3, -8.167482988553411d-3,&
+     -8.288347249486747d-3, -8.408628369535837d-3, -8.528330932396275d-3,&
+     -8.647458848755431d-3, -8.766015375402829d-3, -8.884003124541974d-3,&
+     -9.001424074841970d-3, -9.118279590907854d-3, -9.234570454679255d-3,&
+     -9.350296910174005d-3, -9.465458721612778d-3, -9.580055244031766d-3,&
+     -9.694085504896373d-3, -9.807548294578283d-3, -9.920442262019286d-3/)
+
+  JacU = (/7.738077153201838d-3, 4.043383453750170d-3, 4.104706612712742d-3,&
+     4.165730616290477d-3, 4.226458733033555d-3, 4.286893822432338d-3,&
+     4.347038357917113d-3, 4.406894460317085d-3, 4.466463912794555d-3,&
+     4.525748166814183d-3, 4.584748346676341d-3, 4.643465257052578d-3,&
+     4.701899395997070d-3, 4.760050974585458d-3, 4.817919943490685d-3,&
+     4.875506026223682d-3, 4.932808758394314d-3, 4.989827532103520d-3,&
+     5.046561644173274d-3/)
+
+  call phi_func(JacL,JacD,JacU,1.d0,1,wphivec,approxphi1)
+  call phi_func(JacL,JacD,JacU,1.d0,2,wphivec,approxphi2)
+
+  ! exact values computed from matlab package
+  exactphi1 = (/1.00000000000000d0, 1.000000000000000d0, 1.000000000000000d0,&
+   1.000000000000000d0, 1.000000000000000d0, 1.000000000000000d0,&
+   1.000000000000000d0, 0.999999999999999d0, 1.000000000000000d0,&
+   1.000000000000000d0, 1.000000000000000d0, 1.000000000000000d0,&
+   1.000000000000000d0, 0.999999999999990d0, 0.999999999995728d0,&
+   0.999999998692878d0, 0.999999724172740d0, 0.999962818137734d0,&
+   0.997153459425592d0, 0.898899125938730d0, 5.903079999999994d0,&
+   5.903080000000004d0, 5.903079999999995d0, 5.903080000000000d0,&
+   5.903080000000007d0, 5.903079999999992d0, 5.903079999999991d0,&
+   5.903079999999997d0, 5.903079999999999d0, 5.903080000000004d0,&
+   5.903080000000001d0, 5.903079999999997d0, 5.903080000000000d0,&
+   5.903079999999992d0, 5.903079999996864d0, 5.903079998875120d0,&
+   5.903079713289993d0, 5.903031273165351d0, 5.898047757507157d0,&
+   5.630830746086886d0/)
+  exactphi2 = (/0.499999999999999d0, 0.500000000000000d0, 0.500000000000000d0,&
+   0.500000000000000d0, 0.500000000000000d0, 0.499999999999999d0,&
+   0.500000000000000d0, 0.500000000000000d0, 0.500000000000000d0,&
+   0.500000000000000d0, 0.500000000000000d0, 0.500000000000000d0,&
+   0.500000000000000d0, 0.499999999999999d0, 0.499999999999680d0,&
+   0.499999999885289d0, 0.499999970762255d0, 0.499995030997388d0,&
+   0.499486828433062d0, 0.472236914968437d0, 2.134359999999999d0,&
+   2.134360000000002d0, 2.134359999999999d0, 2.134360000000000d0,&
+   2.134360000000002d0, 2.134359999999997d0, 2.134359999999998d0,&
+   2.134359999999998d0, 2.134360000000001d0, 2.134360000000001d0,&
+   2.134360000000000d0, 2.134360000000000d0, 2.134360000000000d0,&
+   2.134360000000000d0, 2.134359999999781d0, 2.134359999909158d0,&
+   2.134359972483890d0, 2.134354244426776d0, 2.133588961364873d0,&
+   2.075346461851523d0/)
+
+  phi1_err=norm2(approxphi1 - exactphi1)
+  phi2_err=norm2(approxphi2 - exactphi2)
+
+  if (phi1_err > 1e-3) then 
+     write(iulog,*)'WARNING:  Analytic and exact phi_1 functions differ by ', phi1_err
+  else
+     if (hybrid%masterthread) write(iulog,*)&
+          'PASS. L2 error of analytic and exact phi_1 functions: ',phi1_err
+  end if
+  if (phi2_err > 1e-3) then 
+     write(iulog,*)'WARNING:  Analytic and exact phi_2 functions differ by ', phi2_err
+  else
+     if (hybrid%masterthread) write(iulog,*)&
+          'PASS. L2 error of analytic and exact phi_2 functions: ',phi2_err
+  end if
+
+  end subroutine test_phifunc
 
 
 end module 

@@ -51,7 +51,7 @@ module prim_advance_mod
   save
   public :: prim_advance_exp, prim_advance_init1, &
        applycamforcing_dynamics, compute_andor_apply_rhs, matrix_exponential,&
-       matrix_exponential2
+       matrix_exponential2, phi_func
 
 contains
 
