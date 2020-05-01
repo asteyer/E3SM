@@ -97,7 +97,8 @@ contains
     real (kind=real_kind) :: stage1(nets:nete,np,np,nlevp,6),&
                                 stage2(nets:nete,np,np,nlevp,6),&
                                 stage3(nets:nete,np,np,nlevp,6),&
-                                stage4(nets:nete,np,np,nlevp,6)
+                                stage4(nets:nete,np,np,nlevp,6),&
+                                sum_part1(nets:nete,np,np,nlevp,6)
     real (kind=real_kind) :: a21,a32,a43,a54,a65,a61,c2,c3,c4,c5,b1,b2,b3,b4
     real (kind=real_kind) :: wphivec(2*nlev)
     real (kind=real_kind) :: Lu(2*nlev,np,np,nete-nets+1)
@@ -1191,6 +1192,95 @@ contains
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
       call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,-dt/c2,nm1,elem,nets,nete)
+
+!!==========================================================================================================
+    elseif (tstep_type == 24) then ! RKMK order 4
+      c2 = 1.d0/2.d0
+      c3 = 1.d0/2.d0
+      c4 = 1.d0
+
+      ! Compute JacL, JacD, and JacU
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+
+      ! Stage1 = N(u_m) stored in np1
+      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
+      call store_state(elem,np1,nets,nete,stage1)
+
+      ! Calculate Stage2 = N(exp(Ldt/2)u_m + dt/2 phi1(Ldt/2)Stage1)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt/2.d0,1,np1,elem,nets,nete)
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt/2.d0,nets,nete) ! exp(Ldt)u_m is in nm1
+      call linear_combination_of_elem(np1,1.d0,nm1,dt/2.d0,np1,elem,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
+      call store_state(elem,np1,nets,nete,stage2)
+
+      ! Calculate Stage3
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt/2.d0,1,np1,elem,nets,nete) !phi1(dt/2L)Stage2 is stored in np1
+      call linear_combination_of_elem(nm1,-dt/8.d0,np1,0.d0,nm1,elem,nets,nete)
+      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,nm1,nets,nete,Lu)
+      call linear_combination_of_elem(np1,1.d0/2.d0,np1,0.d0,nm1,elem,nets,nete)
+      call add_Lu(elem,np1,Lu,nets,nete) !1/2(1-dt/4L)phi1(dt/2L)Stage2 is stored in np1
+
+      call retrieve_state(stage1,elem,nm1,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt/2.d0,1,nm1,elem,nets,nete)
+      call linear_combination_of_elem(nm1,dt/8.d0,nm1,0.d0,np1,elem,nets,nete)
+      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,nm1,nets,nete,Lu)
+      call add_Lu(elem,np1,Lu,nets,nete) !dt/8*L*phi1(dt/2 L)Stage1 is added to previous term
+
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt/2.d0,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
+
+      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call store_state(elem,nm1,nets,nete,stage3) ! stored in nm1
+
+      ! Calculate Stage4
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete) 
+      call linear_combination_of_elem(np1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,.false.,dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete)
+      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! stored in nm1
+      
+      ! Compute u_mp1
+      call linear_combination_of_elem(np1,-dt/2.d0,nm1,0.d0,np1,elem,nets,nete)
+      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,np1,nets,nete,Lu)
+      call add_Lu(elem,nm1,Lu,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,dt/6.d0,nm1,0.d0,np1,elem,nets,nete) ! Stage 4 term added to sum
+
+      call retrieve_state(stage3,elem,nm1,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,dt/3.d0,nm1,elem,nets,nete) ! Stage 3 term added to sum
+
+      call retrieve_state(stage2,elem,nm1,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,dt/3.d0,nm1,elem,nets,nete) ! Stage 2 term added to sum
+      call store_state(elem,np1,nets,nete,sum_part1) ! Need to store sum to access more storage for next part
+
+      call retrieve_state(stage1,elem,nm1,nets,nete)
+      call linear_combination_of_elem(np1,dt/2.d0,nm1,0.d0,np1,elem,nets,nete)
+      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,np1,nets,nete,Lu)
+      call add_Lu(elem,nm1,Lu,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
+      call retrieve_state(sum_part1,elem,np1,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,dt/6.d0,nm1,elem,nets,nete) ! Stage 1 term added to sum
+
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete) ! Next step stored in np1
 
 
 
