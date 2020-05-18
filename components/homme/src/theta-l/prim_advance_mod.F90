@@ -1221,8 +1221,8 @@ contains
       call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt/2.d0,nets,nete) ! exp(Ldt)u_m is in nm1
       call linear_combination_of_elem(np1,1.d0,nm1,dt/2.d0,np1,elem,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
       call store_state(elem,np1,nets,nete,stage2)
 
       ! Calculate Stage3
