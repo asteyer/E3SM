@@ -1219,7 +1219,7 @@ contains
       ! Calculate Stage2 = N(exp(Ldt/2)u_m + dt/2 phi1(Ldt/2)Stage1)
       call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt/2.d0,1,np1,elem,nets,nete)
       call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt/2.d0,nets,nete) ! exp(Ldt)u_m is in nm1
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,.false.,dt/2.d0,nets,nete) ! exp(Ldt/2)u_m is in nm1
       call linear_combination_of_elem(np1,1.d0,nm1,dt/2.d0,np1,elem,nets,nete)
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
@@ -3771,7 +3771,7 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
 !=====================================================================
   subroutine add_Lu(elem,n0,Lu,nets,nete)
   type(element_t), intent(inout)   :: elem(:)
-  real(kind=real_kind), intent(in) :: Lu(2*nlev)
+  real(kind=real_kind), intent(in) :: Lu(2*nlev,np,np,nete-nets+1)
   integer, intent(in)              :: nets,nete,n0
   ! local variables
   integer :: ie,i,j
@@ -3780,8 +3780,8 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
   do ie = nets,nete 
     do i = 1,np
       do j = 1,np
-        elem(ie)%state%w_i(i,j,1:nlev,n0)     = elem(ie)%state%w_i(i,j,1:nlev,n0) + Lu(1:nlev)
-        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = elem(ie)%state%phinh_i(i,j,1:nlev,n0) + Lu(nlev+1:2*nlev)
+        elem(ie)%state%w_i(i,j,1:nlev,n0)     = elem(ie)%state%w_i(i,j,1:nlev,n0) + Lu(1:nlev,i,j,ie)
+        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = elem(ie)%state%phinh_i(i,j,1:nlev,n0) + Lu(nlev+1:2*nlev,i,j,ie)
       end do
     end do
   end do
