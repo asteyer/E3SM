@@ -78,7 +78,7 @@ contains
     ! 
 
     ! unit test for phi functions
-    call test_phifunc(hybrid)
+!    call test_phifunc(hybrid)
 
     ! compute scaling of sponge layer damping 
     !
@@ -255,7 +255,7 @@ contains
   w(3) = 1.d0
 
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU,.false.,5,1.d0, approxexpJac)
+  call matrix_exponential(JacL, JacD, JacU,5,1.d0, approxexpJac)
   
   exactExp = 0.d0
   exactExp(1,1) = exp(-23.47836142539358d0)
@@ -349,7 +349,7 @@ contains
   w = 0.d0
   w(2) = 1.d0
   ! Rational approximation
-  call matrix_exponential(JacL, JacD, JacU,.false.,4,1.d0, approxexpJac)  
+  call matrix_exponential(JacL, JacD, JacU,4,1.d0, approxexpJac)  
   exactExp = (0.d0, 0.d0)
   exactExp(1,1) = exp(dcmplx(0.d0,12.42728757865824d0))
   exactExp(2,2) = exp(dcmplx(0.d0,-12.42728757865824d0))
@@ -507,8 +507,8 @@ contains
 !  print *, "entry of approx =  ", approxexpJac(1,1)
 !  stop
 ! Rational approximation
-!    call matrix_exponential2(JacL, JacD, JacU,.false.,20,1.d0, approxexpJac) !    Taylor approx
-    call matrix_exponential(JacL,JacD,JacU,.false.,20,1.d0,approxexpJac)
+!    call matrix_exponential2(JacL, JacD, JacU,20,1.d0, approxexpJac) !    Taylor approx
+    call matrix_exponential(JacL,JacD,JacU,20,1.d0,approxexpJac)
     error = norm2(real(exactExp) - approxexpJac)
     if (error > 1e-3) then 
       write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
@@ -557,8 +557,8 @@ contains
      4.875506026223682d-3, 4.932808758394314d-3, 4.989827532103520d-3,&
      5.046561644173274d-3/)
 
-  call phi_func(JacL,JacD,JacU,1.d0,1,wphivec,approxphi1)
-  call phi_func(JacL,JacD,JacU,1.d0,2,wphivec,approxphi2)
+!  call phi_func(JacL,JacD,JacU,1.d0,1,wphivec,approxphi1)
+!  call phi_func(JacL,JacD,JacU,1.d0,2,wphivec,approxphi2)
 
   ! exact values computed from matlab package
   exactphi1 = (/1.00000000000000d0, 1.000000000000000d0, 1.000000000000000d0,&
@@ -590,21 +590,21 @@ contains
    2.134359972483890d0, 2.134354244426776d0, 2.133588961364873d0,&
    2.075346461851523d0/)
 
-  phi1_err=norm2(approxphi1 - exactphi1)
-  phi2_err=norm2(approxphi2 - exactphi2)
+!  phi1_err=norm2(approxphi1 - exactphi1)
+!  phi2_err=norm2(approxphi2 - exactphi2)
 
-  if (phi1_err > 1e-3) then 
-     write(iulog,*)'WARNING:  Analytic and exact phi_1 functions differ by ', phi1_err
-  else
-     if (hybrid%masterthread) write(iulog,*)&
-          'PASS. L2 error of analytic and exact phi_1 functions: ',phi1_err
-  end if
-  if (phi2_err > 1e-3) then 
-     write(iulog,*)'WARNING:  Analytic and exact phi_2 functions differ by ', phi2_err
-  else
-     if (hybrid%masterthread) write(iulog,*)&
-          'PASS. L2 error of analytic and exact phi_2 functions: ',phi2_err
-  end if
+!  if (phi1_err > 1e-3) then 
+!     write(iulog,*)'WARNING:  Analytic and exact phi_1 functions differ by ', phi1_err
+!  else
+!     if (hybrid%masterthread) write(iulog,*)&
+!          'PASS. L2 error of analytic and exact phi_1 functions: ',phi1_err
+!  end if
+!  if (phi2_err > 1e-3) then 
+!     write(iulog,*)'WARNING:  Analytic and exact phi_2 functions differ by ', phi2_err
+!  else
+!     if (hybrid%masterthread) write(iulog,*)&
+!          'PASS. L2 error of analytic and exact phi_2 functions: ',phi2_err
+!  end if
 
   end subroutine test_phifunc
 
