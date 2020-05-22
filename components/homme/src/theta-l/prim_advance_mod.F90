@@ -3745,7 +3745,7 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
        JacU_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1)
   type (element_t), intent(inout), target :: elem(:)
   integer, intent(in) :: n0,nets,nete
-  real (kind=real_kind), intent(out) :: Lu(2*nlev,np,np,nete-nets+1)
+  real (kind=real_kind), intent(out) :: Lu(np,np,2*nlev,nete-nets+1)
 
   ! Local variables
   integer :: ie,i,j,k
@@ -3755,10 +3755,9 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
     do i = 1,np
       do j = 1,np
         call formJac(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),1.d0,Jac)
-
-        Lu(1:nlev,i,j,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-        Lu(1+nlev:2*nlev,i,j,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        Lu(:,i,j,ie) = matmul(Jac,Lu(:,i,j,ie))
+        Lu(i,j,1:nlev,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+        Lu(i,j,1+nlev:2*nlev,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
+        Lu(i,j,:,ie) = matmul(Jac,Lu(i,j,:,ie))
       end do
     end do
   end do
@@ -3771,19 +3770,15 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,neg,dt,nets,nete)
 !=====================================================================
   subroutine add_Lu(elem,n0,Lu,nets,nete)
   type(element_t), intent(inout)   :: elem(:)
-  real(kind=real_kind), intent(in) :: Lu(2*nlev,np,np,nete-nets+1)
+  real(kind=real_kind), intent(in) :: Lu(np,np,2*nlev,nete-nets+1)
   integer, intent(in)              :: nets,nete,n0
   ! local variables
-  integer :: ie,i,j
+  integer :: ie
  
   ! update w and phi with the action of phi_func
   do ie = nets,nete 
-    do i = 1,np
-      do j = 1,np
-        elem(ie)%state%w_i(i,j,1:nlev,n0)     = elem(ie)%state%w_i(i,j,1:nlev,n0) + Lu(1:nlev,i,j,ie)
-        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = elem(ie)%state%phinh_i(i,j,1:nlev,n0) + Lu(nlev+1:2*nlev,i,j,ie)
-      end do
-    end do
+    elem(ie)%state%w_i(:,:,1:nlev,n0)     = elem(ie)%state%w_i(:,:,1:nlev,n0) + Lu(:,:,1:nlev,ie)
+    elem(ie)%state%phinh_i(:,:,1:nlev,n0) = elem(ie)%state%phinh_i(:,:,1:nlev,n0) + Lu(:,:,nlev+1:2*nlev,ie)
   end do
   end subroutine add_Lu
 !=================================================================================================
