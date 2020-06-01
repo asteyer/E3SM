@@ -18,8 +18,8 @@ module model_init_mod
   use hybvcoord_mod, 	  only: hvcoord_t
   use hybrid_mod,         only: hybrid_t
   use dimensions_mod,     only: np,nlev,nlevp
-  use eos          ,      only: pnh_and_exner_from_eos,get_dirk_jacobian
-  use prim_advance_mod,   only: matrix_exponential, matrix_exponential2,phi_func
+  use eos          ,      only: pnh_and_exner_from_eos,get_dirk_jacobian,get_exp_jacobian
+  use prim_advance_mod,   only: matrix_exponential,matrix_exponential2,phi_func,getLu,formJac
   use element_state,      only: timelevels, nu_scale_top
   use viscosity_mod,      only: make_c0_vector
   use kinds,              only: real_kind,iulog
@@ -79,6 +79,9 @@ contains
 
     ! unit test for phi functions
 !    call test_phifunc(hybrid)
+
+    ! unit test for forming Lu
+    call test_getLu(elem,hybrid,hvcoord,tl,nets,nete)
 
     ! compute scaling of sponge layer damping 
     !
@@ -608,5 +611,74 @@ contains
 
   end subroutine test_phifunc
 
+  subroutine test_getLu(elem,hybrid,hvcoord,tl,nets,nete)
+  ! the following code compares the analytic vs exact imex Jacobian
+  ! can test over more elements if desired
+  type(element_t)   , intent(in) :: elem(:)
+  type(hybrid_t)    , intent(in) :: hybrid
+  type (hvcoord_t)  , intent(in) :: hvcoord
+  type (TimeLevel_t), intent(in) :: tl  
+  integer                        :: nets,nete
+
+  real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
+  real (kind=real_kind) :: JacU(nlev-1,np,np)
+  real (kind=real_kind) :: JacD_elem(nlev,np,np,nete-nets+1), &
+                           JacU_elem(nlev-1,np,np,nete-nets+1), &
+                           JacL_elem(nlev-1,np,np,nete-nets+1) 
+  real (kind=real_kind) :: dp3d(np,np,nlev), phis(np,np)
+  real (kind=real_kind) :: phi_i(np,np,nlevp)
+  real (kind=real_kind) :: vtheta_dp(np,np,nlev)
+  real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
+  real (kind=real_kind) :: exner(np,np,nlev)
+  real (kind=real_kind) :: pnh(np,np,nlev),	pnh_i(np,np,nlevp)
+  real (kind=real_kind) :: Lu(np,np,2*nlev,nete-nets+1)
+  real (kind=real_kind) :: error,tempErr
+  real (kind=real_kind) :: Jac(2*nlev,2*nlev), Lu_matmul(np,np,2*nlev,nete-nets+1)
+
+  integer :: k,ie,qn0,i,j
+
+  error = 0.d0
+  if (hybrid%masterthread) write(iulog,*)'Running getLu unit test...'
+  do ie=nets,nete
+    do k=1,nlev
+       dp3d(:,:,k) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+            ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,tl%n0)
+    enddo
+    vtheta_dp(:,:,:) = elem(ie)%state%vtheta_dp(:,:,:,tl%n0)
+    phi_i(:,:,:)         = elem(ie)%state%phinh_i(:,:,:,tl%n0)
+    phis(:,:)          = elem(ie)%state%phis(:,:)
+    call TimeLevel_Qdp(tl, qsplit, qn0)
+    call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,&
+            pnh,exner,dpnh_dp_i,pnh_i_out=pnh_i) ! not sure if we need this
+    call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_i,pnh,1)
+    JacL_elem(:,:,:,ie) = JacL
+    JacD_elem(:,:,:,ie) = JacD
+    JacU_elem(:,:,:,ie) = JacU
+  end do 
+
+  call getLu(JacL_elem,JacD_elem,JacU_elem,elem,tl%n0,nets,nete,Lu)
+  do ie = nets,nete
+    do i = 1,np
+      do j = 1,np
+        call formJac(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),1.d0,Jac)
+        Lu_matmul(i,j,1:nlev,ie) = elem(ie)%state%w_i(i,j,1:nlev,tl%n0)
+        Lu_matmul(i,j,1+nlev:2*nlev,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,tl%n0)
+        Lu_matmul(i,j,:,ie) = matmul(Jac,Lu_matmul(i,j,:,ie))
+      end do
+    end do
+    tempErr = norm2(Lu_matmul(:,:,:,ie) - Lu(:,:,:,ie))
+    if (tempErr > error) then
+      error = tempErr
+    end if
+  end do
+  if (error > 1e-3) then 
+     write(iulog,*)'WARNING: Lu computations differ by ', error
+     write(iulog,*)'Please check that the computation of Lu in prim_advance.F90 is actually exact'
+  else
+     if (hybrid%masterthread) write(iulog,*)&
+          'PASS. max error of Lu computation: ', error
+  end if
+  
+  end subroutine test_getLu
 
 end module 

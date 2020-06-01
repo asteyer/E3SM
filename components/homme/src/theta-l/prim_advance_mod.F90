@@ -51,7 +51,7 @@ module prim_advance_mod
   save
   public :: prim_advance_exp, prim_advance_init1, &
        applycamforcing_dynamics, compute_andor_apply_rhs, matrix_exponential,&
-       matrix_exponential2, phi_func
+       matrix_exponential2, phi_func, getLu, formJac
 
 contains
 
@@ -3733,25 +3733,47 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
   subroutine getLu(JacL_elem,JacD_elem,JacU_elem,elem,n0,nets,nete,Lu)
   real (kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),&
        JacU_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1)
-  type (element_t), intent(inout), target :: elem(:)
+  type (element_t), intent(in) :: elem(:)
   integer, intent(in) :: n0,nets,nete
   real (kind=real_kind), intent(out) :: Lu(np,np,2*nlev,nete-nets+1)
 
   ! Local variables
   integer :: ie,i,j,k
-  real (kind=real_kind) :: Jac(2*nlev,2*nlev) 
+! real (kind=real_kind) :: Jac(2*nlev,2*nlev) 
+! real (kind=real_kind) :: Lu_matmul(np,np,2*nlev,nete-nets+1) ! for unit test
+
+! do ie = nets,nete
+!   do i = 1,np
+!     do j = 1,np
+!       call formJac(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),1.d0,Jac)
+!       Lu_matmul(i,j,1:nlev,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+!       Lu_matmul(i,j,1+nlev:2*nlev,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
+!       Lu_matmul(i,j,:,ie) = matmul(Jac,Lu_matmul(i,j,:,ie))
+!     end do
+!   end do
+! end do
 
   do ie = nets,nete
     do i = 1,np
       do j = 1,np
-        call formJac(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),1.d0,Jac)
-        Lu(i,j,1:nlev,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-        Lu(i,j,1+nlev:2*nlev,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        Lu(i,j,:,ie) = matmul(Jac,Lu(i,j,:,ie))
+        ! [0 g*tri \\ g*I 0][w \\ phi] = g*[tri*phi \\ w]
+        Lu(i,j,1+nlev:2*nlev,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+        ! first component
+        Lu(i,j,1,ie) = JacD_elem(1,i,j,ie)*elem(ie)%state%phinh_i(i,j,1,n0)&
+          + JacU_elem(1,i,j,ie)*elem(ie)%state%phinh_i(i,j,2,n0)
+        ! last component 
+        Lu(i,j,nlev,ie) = JacL_elem(nlev-1,i,j,ie)*elem(ie)%state%phinh_i(i,j,nlev-1,n0)&
+          +JacD_elem(nlev,i,j,ie)*elem(ie)%state%phinh_i(i,j,nlev,n0)
+        ! inner components
+        Lu(i,j,2:nlev-1,ie) = JacL_elem(1:nlev-2,i,j,ie)*elem(ie)%state%phinh_i(i,j,1:nlev-2,n0)&
+           + JacD_elem(2:nlev-1,i,j,ie)*elem(ie)%state%phinh_i(i,j,2:nlev-1,n0)&
+           + JacU_elem(2:nlev-1,i,j,ie)*elem(ie)%state%phinh_i(i,j,3:nlev,n0)
+          Lu(i,j,:,ie) = g*Lu(i,j,:,ie)
       end do
     end do
   end do
 
+! print *, "Difference between matmul and entry manipulation:", norm2(Lu_matmul - Lu)
   end subroutine getLu
 !===================================================================
 ! The subroutine add_Lu updates the state variables  
