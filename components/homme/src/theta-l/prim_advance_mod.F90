@@ -3333,6 +3333,7 @@ contains
   real (kind=real_kind), intent(in):: alph
  
   ! local variables
+  real (kind=real_kind) :: DinvN_LU(dimJac,dimJac)
   complex(kind=8) :: sig1, sig2, sig1Inv, sig2Inv, kfac, alpha
   integer :: block_dim, info, i
   integer :: ipiv(dimJac)
@@ -3358,8 +3359,8 @@ contains
     call DGETRF(dimJac, dimJac, DinvN, dimJac, ipiv, info)
     call DGETRI(dimJac, DinvN, dimJac, ipiv, work, dimJac, info)
 
-    DinvN = matmul(DinvN, N)
-
+!    DinvN_LU = matmul(DinvN, N)
+    DinvN = matmul(DinvN,N)
   else  ! Use triangular solves and back substitution
     if (p /= 2) then
       stop 'Must have p = 2 approximation' ! Factoring done by hand - only for p=2
@@ -3423,6 +3424,9 @@ contains
     X1 = sig2Inv * (N1 + alpha*matmul(Tri,X2))
     DinvN(1:block_dim, :) = real(X1)
     DinvN(block_dim+1:dimJac, :) = real(X2)
+
+!    print *, "Difference is ", norm2(DinvN_LU - DinvN)
+!    stop
   end if
 
   end subroutine get_DinvN
@@ -3699,11 +3703,15 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
 
   ! local variables
   real(kind=real_kind)  :: Jac(2*nlev,2*nlev),JInv(2*nlev,2*nlev),expJ(2*nlev,2*nlev),&
-      c(2*nlev)
+      c(2*nlev),c_1(nlev),c_2(nlev),phi_k2(2*nlev),du2(nlev-2),eye(nlev,nlev)
+  real(kind=real_kind)  :: Lcopy(nlev-1), Dcopy(nlev), Ucopy(nlev-1)
   integer               :: k,info
   integer               :: ipiv(nlev)
-  complex(kind=8)       :: work(nlev)
+  complex(kind=8)       :: work(2*nlev)
   
+  Lcopy = JacL
+  Dcopy = JacD
+  Ucopy = JacU
   call formJac(JacL,JacD,JacU,dt,Jac)
   ! Calculate Jac^(-1) for later
   JInv = Jac
@@ -3715,12 +3723,41 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
   c = wphivec
   call matrix_exponential(JacL,JacD,JacU,nlev,dt,expJ,c)
   c = c - wphivec
+  c_1 = c(1:nlev)
+  c_2 = c(nlev+1:2*nlev)
+  phi_k2 = 0.d0
+  phi_k2(1:nlev) = c_2
+
+  call DGTTRF(nlev,Lcopy,Dcopy,Ucopy,du2,ipiv,info)
+  call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
+
+  phi_k2(nlev+1:2*nlev) = c_1
+  phi_k2 = phi_k2/(g*dt)
+
   phi_k = matmul(JInv,c) 
+!  print *, "Error of phi1: ", norm2(phi_k - phi_k2)
+!  stop
+  if (norm2(phi_k-phi_k2)>1e-10) then
+    print *, "Error: check accuracy of phi function"
+    print *, "Error = ", norm2(phi_k-phi_k2)
+    stop
+  end if
+
+
   ! calculate phi_k recursively
   if (deg .ge. 2) then
     do k = 2,deg
       phi_k = phi_k - 1/gamma(dble(k))*wphivec
+      c_1 = phi_k(1:nlev)
+      c_2 = phi_k(nlev+1:2*nlev)
+      call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
+      phi_k2(1:nlev) = c_2/(g*dt)
+      phi_k2(nlev+1:2*nlev) = c_1/(g*dt)
       phi_k = matmul(JInv,phi_k)
+      if (norm2(phi_k-phi_k2)>1e-10) then
+        print *, "Error of phi2 is ", norm2(phi_k2-phi_k)
+        stop
+      end if
     end do
   end if
   end subroutine phi_func
