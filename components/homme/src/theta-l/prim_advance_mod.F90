@@ -3722,36 +3722,36 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
   Lcopy = JacL
   Dcopy = JacD
   Ucopy = JacU
-  call formJac(JacL,JacD,JacU,dt,Jac)
+!  call formJac(JacL,JacD,JacU,dt,Jac)
   ! Calculate Jac^(-1) for later
-  JInv = Jac
+!  JInv = Jac
   work = 0.d0
   ipiv = 0
-  call DGETRF(2*nlev, 2*nlev, JInv, 2*nlev, ipiv, info)
-  call DGETRI(2*nlev, JInv, 2*nlev, ipiv, work, 2*nlev, info)
+!  call DGETRF(2*nlev, 2*nlev, JInv, 2*nlev, ipiv, info)
+!  call DGETRI(2*nlev, JInv, 2*nlev, ipiv, work, 2*nlev, info)
 
   c = wphivec
   call matrix_exponential(JacL,JacD,JacU,nlev,dt,expJ,c)
   c = c - wphivec
   c_1 = c(1:nlev)
   c_2 = c(nlev+1:2*nlev)
-  phi_k2 = 0.d0
-  phi_k2(1:nlev) = c_2
+  phi_k = 0.d0
+  phi_k(1:nlev) = c_2
 
   call DGTTRF(nlev,Lcopy,Dcopy,Ucopy,du2,ipiv,info)
   call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
 
-  phi_k2(nlev+1:2*nlev) = c_1
-  phi_k2 = phi_k2/(g*dt)
+  phi_k(nlev+1:2*nlev) = c_1
+  phi_k = phi_k/(g*dt)
 
-  phi_k = matmul(JInv,c) 
+!  phi_k = matmul(JInv,c) 
 !  print *, "Error of phi1: ", norm2(phi_k - phi_k2)
 !  stop
-  if (norm2(phi_k-phi_k2)>1e-10) then
-    print *, "Error: check accuracy of phi function"
-    print *, "Error = ", norm2(phi_k-phi_k2)
-    stop
-  end if
+!  if (norm2(phi_k-phi_k2)>1e-10) then
+!    print *, "Error: check accuracy of phi function"
+!    print *, "Error = ", norm2(phi_k-phi_k2)
+!    stop
+!  end if
 
 
   ! calculate phi_k recursively
@@ -3761,13 +3761,13 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
       c_1 = phi_k(1:nlev)
       c_2 = phi_k(nlev+1:2*nlev)
       call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
-      phi_k2(1:nlev) = c_2/(g*dt)
-      phi_k2(nlev+1:2*nlev) = c_1/(g*dt)
-      phi_k = matmul(JInv,phi_k)
-      if (norm2(phi_k-phi_k2)>1e-10) then
-        print *, "Error of phi2 is ", norm2(phi_k2-phi_k)
-        stop
-      end if
+!      phi_k = matmul(JInv,phi_k)
+      phi_k(1:nlev) = c_2/(g*dt)
+      phi_k(nlev+1:2*nlev) = c_1/(g*dt)
+!      if (norm2(phi_k-phi_k2)>1e-10) then
+!        print *, "Error of phi2 is ", norm2(phi_k2-phi_k)
+!        stop
+!      end if
     end do
   end if
   end subroutine phi_func
