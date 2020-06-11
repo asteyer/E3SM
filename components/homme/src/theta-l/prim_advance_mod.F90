@@ -3334,6 +3334,90 @@ contains
   end if
 
   end subroutine matrix_exponential
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine matrix_exponential_new(JacL, JacD, JacU, dt, expJ, w)
+  !===================================================================================
+  ! Using a Pade approximation,
+  ! this subroutine calculates the matrix exponential of the matrix of the form
+  !    [ 0       g*dt*T
+  !      g*dt*I       0 ],
+  ! where the tridiagonal matrix T is given by the input vectors JacL, JacD, and JacU
+  !
+  ! This matrix exponential is returned as expJ. The product (e^J)*w is also
+  ! calculated, and returned as w.
+  !===================================================================================
+
+  real(kind=real_kind), intent(in)  :: JacL(nlev-1), JacD(nlev), JacU(nlev-1), dt
+  real(kind=real_kind), intent(out) :: expJ(2*nlev,2*nlev)
+  real(kind=real_kind), intent(inout), optional :: w(2*nlev)
+
+  ! local variables
+  real(kind=real_kind) :: N(2*nlev,2*nlev), D(2*nlev,2*nlev), Aj(2*nlev,2*nlev),&
+                          negAj(2*nlev,2*nlev), Jac(2*nlev,2*nlev),&
+                          Dinv(2*nlev,2*nlev), iden(2*nlev,2*nlev),&
+                          DinvN(2*nlev,2*nlev), work(2*nlev), normJ, pfac, fac, scaling_const
+  integer :: ipiv(2*nlev),i,j,p,q,info, maxiter, k
+
+  p = 2  ! parameter used in diagonal Pade approximation
+  q = 2
+  pfac = 1.d0/gamma(dble(p+q+1.d0))
+  ! Initialize random A and normalize
+  call formJac(JacL,JacD,JacU,dt,Jac)
+  ! Scaling by power of 2
+  maxiter = 10000
+  k = 0
+  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
+    Jac = Jac / 2.d0
+    k = k + 1
+  end do ! end while loop
+
+  scaling_const = g*dt/(2**k) ! scaling and squaring normalization constant
+  ! Initialize Aj,negAj = identity and N,D = 0.
+  N = 0.d0
+  D = 0.d0
+  Aj = 0.d0
+  negAj = 0.d0
+  Dinv = 0.d0
+  iden = 0.d0
+  expJ = 0.d0
+
+  work = 0.d0
+  ipiv = 0
+
+  do i = 1,2*nlev
+    Aj(i,i) = 1.d0
+    negAj(i,i) = 1.d0
+    iden(i,i) = 1.d0
+  enddo ! end do loop
+
+  ! series for Pade approximation
+  do i=0,p
+    fac = gamma(dble(p+q-i+1.d0))*gamma(dble(p+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(p-i+1.d0)))*pfac
+    N = N + fac*Aj
+    Aj = matmul(Aj,Jac)
+  enddo ! end do loop for Pade approx
+
+  do i=0,q
+    fac = gamma(dble(p+q-i+1.d0))*gamma(dble(q+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(q-i+1.d0)))*pfac
+    D = D + fac*negAj
+    negAj = matmul(negAj,-Jac)
+  enddo ! end do loop for Pade approx
+
+  ! Invert matrix D
+  call get_DinvN_new(D,N,expJ,scaling_const*JacL,scaling_const*JacD,scaling_const*JacU,dcmplx(scaling_const))
+
+  ! Squaring
+  do i=1,k
+    expJ = matmul(expJ, expJ)
+  end do
+  if (present(w)) then
+    w = matmul(expJ, w)
+  end if
+
+  end subroutine matrix_exponential_new
+!===============================================================================
+
+
 !===============================================================================
 
   subroutine get_DinvN(p, D, N, DinvN, Tri, alph, opt,dimJac)
@@ -3404,7 +3488,6 @@ contains
     B = (kfac*(alpha*sig1Inv*N1 + N2))
     call ZGTSV(block_dim, dimJac, TriL, TriD, TriU, B, block_dim, info)
 
-
     X2 = B
     X1 = sig1Inv * (kfac*N1 + alpha*matmul(Tri,X2))
 ! Now do the second tridiag solve
@@ -3440,6 +3523,107 @@ contains
   end if
 
   end subroutine get_DinvN
+!===============================================================================
+
+  subroutine get_DinvN_new(D, N, DinvN, JacL,JacD,JacU,scaling_const)
+  real(kind=real_kind), intent(in)  :: D(2*nlev,2*nlev), N(2*nlev,2*nlev),&
+                                        JacL(nlev-1),JacD(nlev),JacU(nlev-1)
+  real(kind=real_kind), intent(out) :: DinvN(2*nlev,2*nlev)
+  complex(kind=8),      intent(in)  :: scaling_const
+ 
+  ! local variables
+  complex(kind=8) :: sig1, sig2, sig1Inv, sig2Inv, pade_const
+  complex(kind=8) :: work(2*nlev), TriL(nlev-1), TriD(nlev), TriU(nlev-1),&
+                     Tri_prod(nlev,nlev), du2(nlev-2), N11(nlev,nlev),&
+                     N12(nlev,nlev),  N21(nlev,nlev),  N22(nlev,nlev),&
+                     X11(nlev,nlev),  X12(nlev,nlev),  X21(nlev,nlev),&
+                     X22(nlev,nlev)
+  integer         :: info, i, ipiv(2*nlev)
+
+  ! Constants for (2,2) Pade approximant
+  pade_const = (12.d0, 0.d0)
+  sig1       = dcmplx(3.d0,sqrt(3.d0))
+  sig2       = dcmplx(3.d0, (-sqrt(3.d0)))
+  sig1Inv    = conjg(sig1)/(real(sig1)**2 + imag(sig1)**2)
+  sig2Inv    = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
+
+! STEP 1:
+  ! solving the system
+  !    [fac1] [x11 x12] = pade_const*[nhat], where
+  !           [x21 x22]
+  !
+  ! fac1 = [sig i                -jac                 ]
+  !        [  0       sig i - scaling_const*siginv*jac], and
+  !
+  ! nhat = [              n11                                    n12             ]
+  !        [scaling_const*siginv*n11 + n21         scaling_const*siginv*n12 + n22]
+  
+  ! Blocks of N
+  N11 = dcmplx(N(1:nlev,1:nlev))
+  N12 = dcmplx(N(1:nlev,1+nlev:2*nlev))
+  N21 = dcmplx(N(1+nlev:2*nlev,1:nlev))
+  N22 = dcmplx(N(1+nlev:2*nlev,1+nlev:2*nlev))
+
+  ! Tridiagonal matrix: sig1*I - scaling_const*sig1Inv*Jac
+  TriD = dcmplx(JacD)*(-sig1Inv)*scaling_const + sig1
+  TriL = dcmplx(JacL)*(-sig1Inv)*scaling_const
+  TriU = dcmplx(JacU)*(-sig1Inv)*scaling_const
+
+  ! Tridiagonal solve to get X21, X22
+  call zgttrf(nlev,tril,trid,triu,du2,ipiv,info)                  ! LU decomposition
+  X21 = pade_const*(scaling_const*sig1Inv*N11 + N21)              ! Nhat_21 block
+  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X21,nlev,info)! Solve for X21
+  X22 = pade_const*(scaling_const*sig1Inv*N12 + N22)              ! Nhat_22 block
+  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X22,nlev,info)! Solve for X22
+  
+  ! solve for X11 and X12
+  call tri_mult(JacL,JacD,JacU,X21,Tri_prod,nlev)  ! Compute T*X21
+  X11 = sig1Inv * (pade_const*N11 + Tri_prod)      ! Compute X11
+  call tri_mult(JacL,JacD,JacU,X22,Tri_prod,nlev)  ! Compute T*X22
+  X12 = sig1Inv * (pade_const*N12 + Tri_prod)      ! Compute X12
+ 
+! STEP 2:
+  ! solve the system
+  !    [fac2] [DinvN] = [Nhat], where
+  !
+  ! fac2 = [sig I                -Jac                 ]
+  !        [  0       sig I - scaling_const*sigInv*Jac], and
+  !
+  ! Nhat = [              X11                                    X12             ]
+  !        [scaling_const*sigInv*X11 + X21         scaling_const*sigInv*X12 + X22]
+  !   using the Xij from the previous solve.
+
+  ! Blocks of Nhat
+  N11 = X11
+  N12 = X12
+  N21 = X21
+  N22 = X22
+
+  ! Tridiagonal matrix T = sig2 I - scaling_const*sig2Inv*Jac
+  TriD = dcmplx(JacD)*(-sig2Inv)*scaling_const + sig2
+  TriL = dcmplx(JacL)*(-sig2Inv)*scaling_const
+  TriU = dcmplx(JacU)*(-sig2Inv)*scaling_const
+
+  ! Tridiagonal solve to get X21, X22
+  call zgttrf(nlev,TriL,TriD,TriU,du2,ipiv,info)                   ! LU decomposition
+  X21 = scaling_const*(sig2Inv)*N11+N21                            ! Nhat_21 block
+  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X21,nlev,info) ! Get X21
+  X22 = scaling_const*(sig2Inv)*N12+N22                            ! Nhat_22 block
+  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X22,nlev,info) ! Get X22
+
+  ! Back substitution for X11, X12
+  call tri_mult(JacL,JacD,JacU,X21,Tri_prod,nlev)  ! Compute T*X21
+  X11 = sig2Inv * (N11 + Tri_prod)                 ! Compute X11
+  call tri_mult(JacL,JacD,JacU,X22,Tri_prod,nlev)  ! Compute T*X22
+  X12 = sig2Inv * (N12 + Tri_prod)                 ! Compute X12
+
+  ! return DinvN
+  DinvN(1:nlev,1:nlev)               = X11
+  DinvN(1:nlev,nlev+1:2*nlev)        = X12
+  DinvN(1+nlev:2*nlev,1:nlev)        = X21
+  DinvN(1+nlev:2*nlev,1+nlev:2*nlev) = X22
+
+  end subroutine get_DinvN_new
 !===========================================================================================================
   subroutine linear_combination_of_elem(t3,a1,t1,a2,t2,elem,nets,nete)
   !===================================================================================
@@ -3474,8 +3658,8 @@ contains
 
   ! Local variables
   integer :: ie,i,j
-  real (kind=real_kind) :: wphivec(2*nlev)
-  real (kind=real_kind) :: expJ(2*nlev,2*nlev) 
+  real (kind=real_kind) :: wphivec(2*nlev),wphivec2(2*nlev)
+  real (kind=real_kind) :: expJ(2*nlev,2*nlev),expJ2(2*nlev,2*nlev)
 
 
   do ie = nets, nete
@@ -3483,8 +3667,17 @@ contains
       do j = 1,np
         wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
         wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,expJ,wphivec) ! Pade approximation
-!        call matrix_exponential2(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,expJ,wphivec) ! Taylor approximation
+!        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,expJ2,wphivec2) ! Pade approximation
+        call matrix_exponential_new(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),dt,expJ,wphivec)
+!        if (norm2(expJ-expJ2)<1e-10) then
+!          print *, "matrix exponential works!"
+!          print *, "Error = ", norm2(expJ-expJ2)
+!          stop
+!        else
+!          print *, "Error: problem with matrix exponential."
+!          print *, "Error = ", norm2(expJ-expJ2)
+!          stop
+!        end if
         elem(ie)%state%w_i(i,j,1:nlev,n0) = wphivec(1:nlev)
         elem(ie)%state%phinh_i(i,j,1:nlev,n0) = wphivec(1+nlev:2*nlev)
       end do
@@ -3867,4 +4060,20 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
   end do
   Jac = Jac * g * dt
   end subroutine formJac
+!==============================================================================
+  subroutine tri_mult(JacL,JacD,JacU,mat,prod,nrhs)
+  real(kind=real_kind),intent(in) :: JacL(nlev-1),JacD(nlev),JacU(nlev-1)
+  complex(kind=8),intent(in) :: mat(nlev,nrhs)
+  complex(kind=8),intent(out) :: prod(nlev,nrhs)
+  integer :: nrhs
+
+ ! local variables
+  integer :: j
+  do j=1,nrhs ! loop over columns
+    prod(1,j) = JacD(1)*mat(1,j) + JacU(1)*mat(2,j)
+    prod(2:nlev-1,j) = JacD(2:nlev-1)*mat(2:nlev-1,j) + JacL(1:nlev-2)*mat(1:nlev-2,j) + JacU(2:nlev-1)*mat(3:nlev,j)
+    prod(nlev,j) = JacL(nlev-1)*mat(nlev-1,j)+JacD(nlev)*mat(nlev,j)
+  end do
+
+  end subroutine
 end module prim_advance_mod
