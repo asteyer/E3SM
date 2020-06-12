@@ -3335,7 +3335,7 @@ contains
 
   end subroutine matrix_exponential
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential_new(JacL, JacD, JacU, dt, expJ, w)
+  subroutine matrix_exponential_new(JacL, JacD, JacU, dt, expJ, wphi)
   !===================================================================================
   ! Using a Pade approximation,
   ! this subroutine calculates the matrix exponential of the matrix of the form
@@ -3343,28 +3343,23 @@ contains
   !      g*dt*I       0 ],
   ! where the tridiagonal matrix T is given by the input vectors JacL, JacD, and JacU
   !
-  ! This matrix exponential is returned as expJ. The product (e^J)*w is also
-  ! calculated, and returned as w.
+  ! This matrix exponential is returned as expJ. The product (e^J)*wphi is also
+  ! calculated, and returned as wphi.
   !===================================================================================
 
   real(kind=real_kind), intent(in)  :: JacL(nlev-1), JacD(nlev), JacU(nlev-1), dt
   real(kind=real_kind), intent(out) :: expJ(2*nlev,2*nlev)
-  real(kind=real_kind), intent(inout), optional :: w(2*nlev)
+  real(kind=real_kind), intent(inout), optional :: wphi(2*nlev)
 
   ! local variables
-  real(kind=real_kind) :: N(2*nlev,2*nlev), D(2*nlev,2*nlev), Aj(2*nlev,2*nlev),&
-                          negAj(2*nlev,2*nlev), Jac(2*nlev,2*nlev),&
-                          Dinv(2*nlev,2*nlev), iden(2*nlev,2*nlev),&
-                          DinvN(2*nlev,2*nlev), work(2*nlev), normJ, pfac, fac, scaling_const
-  integer :: ipiv(2*nlev),i,j,p,q,info, maxiter, k
+  real(kind=real_kind) :: N(2*nlev,2*nlev), D(2*nlev,2*nlev), DinvN(2*nlev,2*nlev),&
+                          scaling_const, Jac(2*nlev,2*nlev)
+  integer :: i, k, maxiter
 
-  p = 2  ! parameter used in diagonal Pade approximation
-  q = 2
-  pfac = 1.d0/gamma(dble(p+q+1.d0))
-  ! Initialize random A and normalize
-  call formJac(JacL,JacD,JacU,dt,Jac)
+! TO DO: Approximate norm without forming Jacobian
   ! Scaling by power of 2
-  maxiter = 10000
+  call formJac(JacL,JacD,JacU,dt,Jac)
+  maxiter = 15
   k = 0
   do while((norm2(Jac)>0.5d0).and.(k<maxiter))
     Jac = Jac / 2.d0
@@ -3372,36 +3367,39 @@ contains
   end do ! end while loop
 
   scaling_const = g*dt/(2**k) ! scaling and squaring normalization constant
-  ! Initialize Aj,negAj = identity and N,D = 0.
+
+  ! form N(A) = I + 1/2 A + 1/12 A^2
   N = 0.d0
-  D = 0.d0
-  Aj = 0.d0
-  negAj = 0.d0
-  Dinv = 0.d0
-  iden = 0.d0
-  expJ = 0.d0
+  do i = 1,nlev-1
+    ! N_11 block
+    N(i,i)   = scaling_const**2/12.d0*JacD(i) + 1.d0
+    N(i,i+1) = scaling_const**2/12.d0*JacU(i)
+    N(i+1,i) = scaling_const**2/12.d0*JacL(i)
 
-  work = 0.d0
-  ipiv = 0
+    ! N_12 block
+    N(i,i+nlev)   = scaling_const/2.d0*JacD(i)
+    N(i,i+1+nlev) = scaling_const/2.d0*JacU(i)
+    N(i+1,i+nlev) = scaling_const/2.d0*JacL(i)
+ 
+    ! N_21 block
+    N(i+nlev,i) = scaling_const/2.d0 
 
-  do i = 1,2*nlev
-    Aj(i,i) = 1.d0
-    negAj(i,i) = 1.d0
-    iden(i,i) = 1.d0
-  enddo ! end do loop
+    ! N_22 block
+    N(i+nlev,i+nlev)   = scaling_const**2/12.d0*JacD(i) + 1.d0
+    N(i+nlev,i+1+nlev) = scaling_const**2/12.d0*JacU(i)
+    N(i+1+nlev,i+nlev) = scaling_const**2/12.d0*JacL(i)
+  end do
+  N(nlev,nlev)     = scaling_const**2/12.d0*JacD(nlev)+1.d0
+  N(2*nlev,2*nlev) = scaling_const**2/12.d0*JacD(nlev)+1.d0
+  N(nlev,2*nlev)   = scaling_const/2.d0*JacD(nlev)
+  N(2*nlev,nlev)   = scaling_const/2.d0
 
-  ! series for Pade approximation
-  do i=0,p
-    fac = gamma(dble(p+q-i+1.d0))*gamma(dble(p+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(p-i+1.d0)))*pfac
-    N = N + fac*Aj
-    Aj = matmul(Aj,Jac)
-  enddo ! end do loop for Pade approx
-
-  do i=0,q
-    fac = gamma(dble(p+q-i+1.d0))*gamma(dble(q+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(q-i+1.d0)))*pfac
-    D = D + fac*negAj
-    negAj = matmul(negAj,-Jac)
-  enddo ! end do loop for Pade approx
+  ! form D(A) = I + 1/2 A + 1/12 A^2 (only differs from N(A) in sign on the
+  ! off-diagonal blocks)
+  D(1:nlev,1:nlev)               = N(1:nlev,1:nlev)
+  D(1:nlev,1+nlev:2*nlev)        = -N(1:nlev,1+nlev:2*nlev)
+  D(1+nlev:2*nlev,1:nlev)        = -N(1+nlev:2*nlev,1:nlev)
+  D(1+nlev:2*nlev,1+nlev:2*nlev) = N(1+nlev:2*nlev,1+nlev:2*nlev)
 
   ! Invert matrix D
   call get_DinvN_new(D,N,expJ,scaling_const*JacL,scaling_const*JacD,scaling_const*JacU,dcmplx(scaling_const))
@@ -3410,8 +3408,10 @@ contains
   do i=1,k
     expJ = matmul(expJ, expJ)
   end do
-  if (present(w)) then
-    w = matmul(expJ, w)
+
+  ! multiply by wphi if necessary
+  if (present(wphi)) then
+    wphi = matmul(expJ, wphi)
   end if
 
   end subroutine matrix_exponential_new
