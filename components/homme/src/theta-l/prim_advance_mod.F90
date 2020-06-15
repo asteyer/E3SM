@@ -3930,7 +3930,8 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
 !  call DGETRI(2*nlev, JInv, 2*nlev, ipiv, work, 2*nlev, info)
 
   c = wphivec
-  call matrix_exponential(JacL,JacD,JacU,nlev,dt,expJ,c)
+!  call matrix_exponential(JacL,JacD,JacU,nlev,dt,expJ,c)
+  call matrix_exponential_new(JacL,JacD,JacU,dt,expJ,c)
   c = c - wphivec
   c_1 = c(1:nlev)
   c_2 = c(nlev+1:2*nlev)
