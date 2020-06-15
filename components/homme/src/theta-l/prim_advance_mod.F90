@@ -51,7 +51,7 @@ module prim_advance_mod
   save
   public :: prim_advance_exp, prim_advance_init1, &
        applycamforcing_dynamics, compute_andor_apply_rhs, matrix_exponential,&
-       matrix_exponential2, phi_func, getLu, formJac
+       matrix_exponential2, phi_func, getLu, formJac,tri_inv,tri_mult
 
 contains
 
@@ -3353,18 +3353,24 @@ contains
 
   ! local variables
   real(kind=real_kind) :: N(2*nlev,2*nlev), D(2*nlev,2*nlev), DinvN(2*nlev,2*nlev),&
-                          scaling_const, Jac(2*nlev,2*nlev)
+                          scaling_const, Jac(2*nlev,2*nlev), normJac
   integer :: i, k, maxiter
 
 ! TO DO: Approximate norm without forming Jacobian
   ! Scaling by power of 2
-  call formJac(JacL,JacD,JacU,dt,Jac)
   maxiter = 15
   k = 0
-  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
-    Jac = Jac / 2.d0
-    k = k + 1
-  end do ! end while loop
+!  call formJac(JacL,JacD,JacU,dt,Jac)
+!  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
+!    Jac = Jac / 2.d0
+!    k = k + 1
+!  end do ! end while loop
+
+  normJac = g*dt
+  do while(normJac > 0.5/sqrt(real(nlev)))
+    normJac = normJac/2.d0
+    k = k+1
+  end do
 
   scaling_const = g*dt/(2**k) ! scaling and squaring normalization constant
 
@@ -4070,10 +4076,74 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
  ! local variables
   integer :: j
   do j=1,nrhs ! loop over columns
-    prod(1,j) = JacD(1)*mat(1,j) + JacU(1)*mat(2,j)
-    prod(2:nlev-1,j) = JacD(2:nlev-1)*mat(2:nlev-1,j) + JacL(1:nlev-2)*mat(1:nlev-2,j) + JacU(2:nlev-1)*mat(3:nlev,j)
-    prod(nlev,j) = JacL(nlev-1)*mat(nlev-1,j)+JacD(nlev)*mat(nlev,j)
+    prod(1,j)        = JacD(1)*mat(1,j) + JacU(1)*mat(2,j)
+    prod(2:nlev-1,j) = JacD(2:nlev-1)*mat(2:nlev-1,j)&
+                     + JacL(1:nlev-2)*mat(1:nlev-2,j) + JacU(2:nlev-1)*mat(3:nlev,j)
+    prod(nlev,j)     = JacL(nlev-1)*mat(nlev-1,j)+JacD(nlev)*mat(nlev,j)
   end do
 
   end subroutine
+
+!==============================================================================
+  subroutine tri_inv(JacL,JacD,JacU,inv)
+  real(kind=real_kind),intent(in)  :: JacL(nlev-1),JacD(nlev),JacU(nlev-1)
+  real(kind=real_kind),intent(out) :: inv(nlev,nlev)
+  ! local variables
+  integer :: i, j
+  real(kind=real_kind) :: theta(0:nlev),phi(nlev+1),cprod,bprod
+
+  ! initial conditions
+  theta(0)    = 1.d0
+  theta(1)    = JacD(1)
+  phi(nlev+1) = 1.d0
+  phi(nlev)   = JacD(nlev)
+  ! recurrence relation
+  ! theta(i) = JacD(i)theta(i-1)-JacU(i-1)JacL(i-1)*theta(i-2), i = 2...n
+  ! phi(i)   = JacD(i)phi(i+1)-JacU(i)JacL(i)phi(i+2) for i = n-1 ... 1
+  do i = 2,nlev
+    theta(i) = JacD(i)*theta(i-1)-JacU(i-1)*JacL(i-1)*theta(i-2)
+    phi(nlev-i+1) = JacD(nlev-i+1)*phi(nlev-i+2)&
+                  - JacU(nlev-i+1)*JacL(nlev-i+1)*phi(nlev-i+3)
+  end do
+
+  ! form inverse:
+  !if i<j: inv(i,j)=(-1)^(i+j)JacU(i)...JacU(j-1)theta(i-1)phi(j+1)/theta(nlev)
+  !if i=j: inv(i,j)=theta(i-1)*phi(j+1)/theta(nlev)
+  !if i>j: inv(i,j)=(-1)^(i+j)JacL(j)...JacL(i-1)theta(j-1)phi(i+1)/theta(nlev)
+
+  ! first row:
+  inv(1,1) = phi(2)
+  bprod = -JacU(1)
+  do j = 2,nlev-1
+    inv(1,j) = bprod*phi(j+1)
+    bprod = -bprod*JacU(j)
+  end do
+  inv(1,nlev) = bprod*phi(nlev+1)
+  ! interior rows:
+  do i = 2,nlev-1
+    bprod = -JacU(i)
+    cprod = (-1.d0)**(i+1)*product(JacL(1:i-1))
+    do j = 1,i-1
+      inv(i,j) = cprod*theta(j-1)*phi(i+1)
+      cprod = -cprod/JacL(j)
+    end do
+    inv(i,i) = theta(i-1)*phi(j+1)
+    do j = i+1,nlev-1
+      inv(i,j) = bprod*theta(i-1)*phi(j+1)
+      bprod = -bprod * JacU(j)
+    end do
+    inv(i,nlev) = bprod*theta(i-1)*phi(nlev+1)
+  end do
+  ! last row:
+  cprod = -product(JacL(1:nlev-1))
+  do j = 1,nlev-1
+    inv(nlev,j) = cprod*theta(j-1)
+    cprod = -cprod/JacL(j)
+  end do
+  inv(nlev,nlev) = theta(nlev-1)
+
+  inv = inv/theta(nlev)
+
+  end subroutine
+!==============================================================================
 end module prim_advance_mod
