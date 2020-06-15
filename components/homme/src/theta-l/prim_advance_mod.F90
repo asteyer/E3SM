@@ -3360,17 +3360,17 @@ contains
   ! Scaling by power of 2
   maxiter = 15
   k = 0
-!  call formJac(JacL,JacD,JacU,dt,Jac)
-!  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
-!    Jac = Jac / 2.d0
-!    k = k + 1
-!  end do ! end while loop
+  call formJac(JacL,JacD,JacU,dt,Jac)
+  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
+    Jac = Jac / 2.d0
+    k = k + 1
+  end do ! end while loop
 
-  normJac = g*dt
-  do while(normJac > 0.5/sqrt(real(nlev)))
-    normJac = normJac/2.d0
-    k = k+1
-  end do
+!  normJac = g*dt
+!  do while(normJac > 0.5/sqrt(real(nlev)))
+!    normJac = normJac/2.d0
+!    k = k+1
+!  end do
 
   scaling_const = g*dt/(2**k) ! scaling and squaring normalization constant
 
