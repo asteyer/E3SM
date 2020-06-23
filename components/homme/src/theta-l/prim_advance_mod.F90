@@ -51,7 +51,9 @@ module prim_advance_mod
   save
   public :: prim_advance_exp, prim_advance_init1, &
        applycamforcing_dynamics, compute_andor_apply_rhs, matrix_exponential,&
-       matrix_exponential2, phi_func, getLu, formJac,tri_inv,tri_mult
+       matrix_exponential2, phi_func, getLu, formJac,tri_inv,tri_mult,&
+       apply_phi_func, apply_phi_func_new,phi_func_new,store_state,&
+       linear_combination_of_elem
 
 contains
 
@@ -120,6 +122,12 @@ contains
     real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
     real (kind=real_kind) :: dphi(nlev)
     real (kind=real_kind) :: phi_k(2*nlev,np,np,nete-nets+1)
+    real (kind=real_kind) :: phi_deg1(np,np,2*nlev,nete-nets+1,1),phi_deg2(np,np,2*nlev,nete-nets+1,2),&
+                             phi_deg3(np,np,2*nlev,nete-nets+1,3)
+    real (kind=real_kind) :: phi_struct_Nstage1(np,np,2*nlev,nete-nets+1,3),&
+                             phi_struct_Nstage2(np,np,2*nlev,nete-nets+1,3), &
+                             phi_struct_Nstage3(np,np,2*nlev,nete-nets+1,3), &
+                             phi_struct_Nstage4(np,np,2*nlev,nete-nets+1,3)
     integer :: ii
 
     call t_startf('prim_advance_exp')
@@ -3846,7 +3854,7 @@ contains
   end if
 
   end subroutine matrix_exponential2
-
+!------------------------------------------------------------------------------
 subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
   real (kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),JacU_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1)
   type (element_t), intent(inout), target :: elem(:)
@@ -3920,7 +3928,6 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
 
   ! local variables
   integer :: ie
-
   do ie = nets, nete
     stage(ie,:,:,1:nlev,1) = elem(ie)%state%v(:,:,1,:,np1)
     stage(ie,:,:,1:nlev,2) = elem(ie)%state%v(:,:,2,:,np1)
@@ -4069,6 +4076,92 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
   end if
   end subroutine phi_func
 
+!============================================================================
+! This subroutine calculates the phi function phi_k(Ldt) and applies it
+! to a vector c.
+!============================================================================
+  subroutine phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,deg,phi_func,elem,n0,nets,nete)
+
+  real(kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),&
+                                       JacD_elem(nlev,np,np,nete-nets+1),&
+                                       JacU_elem(nlev-1,np,np,nete-nets+1),dt
+  real(kind=real_kind), intent(out) :: phi_func(np,np,2*nlev,nete-nets+1,deg)
+  integer, intent(in)               :: deg,nets,nete,n0
+  type(element_t), intent(in)    :: elem(:)
+ 
+
+  ! local variables
+  real(kind=real_kind)  :: expJ(2*nlev,2*nlev), c(2*nlev),c_1(nlev),c_2(nlev),du2(nlev-2)
+  real(kind=real_kind)  :: Lcopy(nlev-1), Dcopy(nlev),Ucopy(nlev-1),wphivec(2*nlev)
+  integer               :: k,info,ie,i,j
+  integer               :: ipiv(nlev)
+  complex(kind=8)       :: work(2*nlev)
+  phi_func = 0.d0
+  
+  do ie = nets,nete
+    do i = 1,np
+      do j = 1,np
+        Lcopy = JacL_elem(:,i,j,ie)
+        Dcopy = JacD_elem(:,i,j,ie)
+        Ucopy = JacU_elem(:,i,j,ie)
+        work = 0.d0
+        ipiv = 0
+
+        wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
+        wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
+        c = wphivec
+        call matrix_exponential_new(Lcopy,Dcopy,Ucopy,dt,expJ,c)
+        c = c - wphivec
+        c_1 = c(1:nlev)
+        c_2 = c(nlev+1:2*nlev)
+        phi_func(i,j,1:nlev,ie,1) = c_2
+
+        call DGTTRF(nlev,Lcopy,Dcopy,Ucopy,du2,ipiv,info)
+        call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
+
+        phi_func(i,j,nlev+1:2*nlev,ie,1) = c_1
+        phi_func(i,j,:,ie,1) = phi_func(i,j,:,ie,1)/(g*dt)
+
+        ! calculate phi_k recursively
+        if (deg .ge. 2) then
+          do k = 2,deg
+            phi_func(i,j,:,ie,k) = phi_func(i,j,:,ie,k-1) - 1/gamma(dble(k))*wphivec
+            c_1 = phi_func(i,j,1:nlev,ie,k)
+            c_2 = phi_func(i,j,nlev+1:2*nlev,ie,k)
+            call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
+            phi_func(i,j,1:nlev,ie,k) = c_2/(g*dt)
+            phi_func(i,j,nlev+1:2*nlev,ie,k) = c_1/(g*dt)
+          end do
+        end if
+      end do
+    end do
+  end do
+  end subroutine phi_func_new
+
+!============================================================================
+! This subroutine calculates the phi function phi_k(Ldt) and applies it
+! to the state variables located in elem(n0).
+!============================================================================
+  subroutine apply_phi_func_new(phi_func,struct_dim,deg,elem,n0,nets,nete)
+
+  integer, intent(in)               :: deg,n0,nets,nete,struct_dim
+  type(element_t), intent(inout)    :: elem(:)
+  real (kind=real_kind), intent(in) :: phi_func(np,np,2*nlev,nete-nets+1,struct_dim)
+
+  ! local variables
+  integer :: ie
+  
+  do ie = nets, nete
+        elem(ie)%state%w_i(:,:,1:nlev,n0)     = phi_func(:,:,1:nlev,ie,deg)
+        elem(ie)%state%phinh_i(:,:,1:nlev,n0) = phi_func(:,:,nlev+1:2*nlev,ie,deg)
+    if (deg .gt. 1) then ! update other variables
+      elem(ie)%state%v(:,:,1,:,n0)       = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%v(:,:,1,:,n0)
+      elem(ie)%state%v(:,:,2,:,n0)       = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%v(:,:,2,:,n0)
+      elem(ie)%state%vtheta_dp(:,:,:,n0) = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%vtheta_dp(:,:,:,n0)
+      elem(ie)%state%dp3d(:,:,:,n0)      = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%dp3d(:,:,:,n0)
+    end if
+  end do
+  end subroutine apply_phi_func_new
 
 !=================================================================================================
 ! Subroutine getLu calculates the Jacobian L_m and multiplies it by u_m. The
@@ -4242,6 +4335,6 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
 
   inv = inv/theta(nlev)
 
-  end subroutine
+  end subroutine tri_inv
 !==============================================================================
 end module prim_advance_mod

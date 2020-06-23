@@ -19,7 +19,9 @@ module model_init_mod
   use hybrid_mod,         only: hybrid_t
   use dimensions_mod,     only: np,nlev,nlevp
   use eos          ,      only: pnh_and_exner_from_eos,get_dirk_jacobian,get_exp_jacobian
-  use prim_advance_mod,   only: matrix_exponential,matrix_exponential2,phi_func,getLu,formJac,tri_inv,tri_mult
+  use prim_advance_mod,   only: matrix_exponential,matrix_exponential2,phi_func,getLu,&
+                                formJac,tri_inv,tri_mult,phi_func_new,apply_phi_func,&
+                                apply_phi_func_new,store_state,linear_combination_of_elem
   use element_state,      only: timelevels, nu_scale_top
   use viscosity_mod,      only: make_c0_vector
   use kinds,              only: real_kind,iulog
@@ -85,6 +87,9 @@ contains
 
     ! unit test for tri_inv
     call test_tri_inv(elem,hybrid,hvcoord,tl,nets,nete)
+  
+    ! unit test for new phi function
+    call test_new_phi_func(elem,hybrid,hvcoord,tl,nets,nete)
 
     ! compute scaling of sponge layer damping 
     !
@@ -681,7 +686,7 @@ contains
   end if
   
   end subroutine test_getLu
-
+!------------------------------------------------------------------------------
   subroutine test_tri_inv(elem,hybrid,hvcoord,tl,nets,nete)
   type(element_t)   , intent(in) :: elem(:)
   type(hybrid_t)    , intent(in) :: hybrid
@@ -749,5 +754,95 @@ contains
           'PASS. norm2(I-TT^(-1): ', error
   end if
   end subroutine test_tri_inv
+!-----------------------------------------------------------------------------------
+  subroutine test_new_phi_func(elem,hybrid,hvcoord,tl,nets,nete)
+  type(element_t)   , intent(inout) :: elem(:)
+  type(hybrid_t)    , intent(in) :: hybrid
+  type (hvcoord_t)  , intent(in) :: hvcoord
+  type (TimeLevel_t), intent(in) :: tl  
+  integer                        :: nets,nete
 
+  real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
+  real (kind=real_kind) :: JacU(nlev-1,np,np)
+  real (kind=real_kind) :: JacD_elem(nlev,np,np,nete-nets+1), &
+                           JacU_elem(nlev-1,np,np,nete-nets+1), &
+                           JacL_elem(nlev-1,np,np,nete-nets+1) 
+  real (kind=real_kind) :: dp3d(np,np,nlev), phis(np,np)
+  real (kind=real_kind) :: phi_i(np,np,nlevp)
+  real (kind=real_kind) :: vtheta_dp(np,np,nlev)
+  real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
+  real (kind=real_kind) :: exner(np,np,nlev)
+  real (kind=real_kind) :: pnh(np,np,nlev),	pnh_i(np,np,nlevp)
+  real (kind=real_kind) :: Lu(np,np,2*nlev,nete-nets+1)
+  real (kind=real_kind) :: error,tempErr,triInv(nlev,nlev)
+  complex(kind=8)       :: tri_prod(nlev,nlev)
+  real (kind=real_kind) :: Jac(2*nlev,2*nlev), Lu_matmul(np,np,2*nlev,nete-nets+1),dt
+  real (kind=real_kind) :: stage1(nets:nete,np,np,nlevp,6),stage2(nets:nete,np,np,nlevp,6)
+
+  real(kind=real_kind) :: phi_func_struct(np,np,2*nlevp,nete-nets+1,2)
+  real(kind=real_kind) :: var1(nets:nete,np,np,nlev),var2(nets:nete,np,np,nlev)
+  integer :: k,ie,qn0,i,j
+
+  dt = 1.d0
+  error = 0.d0
+  if (hybrid%masterthread) write(iulog,*)'Running phi_func unit test...'
+  do ie=nets,nete
+    do k=1,nlev
+       dp3d(:,:,k) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
+            ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,tl%n0)
+    enddo
+    vtheta_dp(:,:,:) = elem(ie)%state%vtheta_dp(:,:,:,tl%n0)
+    phi_i(:,:,:)         = elem(ie)%state%phinh_i(:,:,:,tl%n0)
+    phis(:,:)          = elem(ie)%state%phis(:,:)
+    call TimeLevel_Qdp(tl, qsplit, qn0)
+    call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,&
+            pnh,exner,dpnh_dp_i,pnh_i_out=pnh_i) ! not sure if we need this
+    call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_i,pnh,1)
+    JacL_elem(:,:,:,ie) = JacL
+    JacD_elem(:,:,:,ie) = JacD
+    JacU_elem(:,:,:,ie) = JacU
+  end do 
+
+  ! copy state to np1
+  call linear_combination_of_elem(tl%np1,1.d0,tl%n0,0.d0,tl%np1,elem,nets,nete)
+  call linear_combination_of_elem(tl%nm1,1.d0,tl%n0,0.d0,tl%nm1,elem,nets,nete)
+
+  ! new phi1 function
+  call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_func_struct,elem,tl%n0,nets,nete)
+  call apply_phi_func_new(phi_func_struct,2,1,elem,tl%n0,nets,nete)
+  call store_state(elem,tl%n0,nets,nete,stage2)
+
+  ! old phi1 function
+  call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,tl%np1,elem,nets,nete) 
+  call store_state(elem,tl%np1,nets,nete,stage1)
+  
+  error = norm2(stage1(:,:,:,1:nlev,:)-stage2(:,:,:,1:nlev,:))
+  if (error > 1e-12) then 
+     write(iulog,*)'WARNING: error of new phi1 function is ', error
+  else
+     if (hybrid%masterthread) write(iulog,*)&
+          'PASS. phi1 error: ', error
+  end if
+  
+  ! new phi2 function
+  call linear_combination_of_elem(tl%n0,1.d0,tl%nm1,0.d0,tl%n0,elem,nets,nete)
+  call apply_phi_func_new(phi_func_struct,2,2,elem,tl%n0,nets,nete)
+  call store_state(elem,tl%n0,nets,nete,stage2)
+
+  ! old phi2 function
+  call linear_combination_of_elem(tl%np1,1.d0,tl%nm1,0.d0,tl%np1,elem,nets,nete)
+  call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,tl%np1,elem,nets,nete)
+  call store_state(elem,tl%np1,nets,nete,stage1)  
+
+  error = norm2(stage1(:,:,:,1:nlev,:)-stage2(:,:,:,1:nlev,:))
+  if (error > 1e-12) then 
+     write(iulog,*)'WARNING: error of new phi2 function is ', error
+  else
+     if (hybrid%masterthread) write(iulog,*)&
+          'PASS. phi2 error: ', error
+  end if
+
+  call linear_combination_of_elem(tl%n0,1.d0,tl%nm1,0.d0,tl%n0,elem,nets,nete)
+ 
+  end subroutine test_new_phi_func
 end module 
