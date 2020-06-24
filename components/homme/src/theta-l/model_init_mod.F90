@@ -779,7 +779,7 @@ contains
   real (kind=real_kind) :: Jac(2*nlev,2*nlev), Lu_matmul(np,np,2*nlev,nete-nets+1),dt
   real (kind=real_kind) :: stage1(nets:nete,np,np,nlevp,6),stage2(nets:nete,np,np,nlevp,6)
 
-  real(kind=real_kind) :: phi_func_struct(np,np,2*nlevp,nete-nets+1,2)
+  real(kind=real_kind) :: phi_func_struct(np,np,2*nlevp,nete-nets+1,3)
   real(kind=real_kind) :: var1(nets:nete,np,np,nlev),var2(nets:nete,np,np,nlev)
   integer :: k,ie,qn0,i,j
 

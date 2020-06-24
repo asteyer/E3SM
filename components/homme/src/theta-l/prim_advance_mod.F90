@@ -4090,13 +4090,13 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
 ! This subroutine calculates the phi function phi_k(Ldt) and applies it
 ! to a vector c.
 !============================================================================
-  subroutine phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,deg,phi_func,elem,n0,nets,nete)
+  subroutine phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,phi_deg,phi_func,elem,n0,nets,nete)
 
   real(kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),&
                                        JacD_elem(nlev,np,np,nete-nets+1),&
                                        JacU_elem(nlev-1,np,np,nete-nets+1),dt
-  real(kind=real_kind), intent(out) :: phi_func(np,np,2*nlev,nete-nets+1,deg)
-  integer, intent(in)               :: deg,nets,nete,n0
+  real(kind=real_kind), intent(out) :: phi_func(np,np,2*nlev,nete-nets+1,3)
+  integer, intent(in)               :: phi_deg,nets,nete,n0
   type(element_t), intent(in)    :: elem(:)
  
 
@@ -4133,8 +4133,8 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
         phi_func(i,j,:,ie,1) = phi_func(i,j,:,ie,1)/(g*dt)
 
         ! calculate phi_k recursively
-        if (deg .ge. 2) then
-          do k = 2,deg
+        if (phi_deg .ge. 2) then
+          do k = 2,phi_deg
             phi_func(i,j,:,ie,k) = phi_func(i,j,:,ie,k-1) - 1/gamma(dble(k))*wphivec
             c_1 = phi_func(i,j,1:nlev,ie,k)
             c_2 = phi_func(i,j,nlev+1:2*nlev,ie,k)
@@ -4156,7 +4156,7 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
 
   integer, intent(in)               :: deg,n0,nets,nete,struct_dim
   type(element_t), intent(inout)    :: elem(:)
-  real (kind=real_kind), intent(in) :: phi_func(np,np,2*nlev,nete-nets+1,struct_dim)
+  real (kind=real_kind), intent(in) :: phi_func(np,np,2*nlev,nete-nets+1,3)
 
   ! local variables
   integer :: ie
