@@ -1494,6 +1494,13 @@ contains
       a41 = (2.d0*c3-1.d0)/(2.d0*c3)
       a43 = 1/(2.d0*c3)
 
+      b12 = (-c3-1.d0)/c3
+      b13 = 2.d0/c3
+      b32 = -1.d0/(c3*(c3-1.d0))
+      b33 = 2.d0/(c3*(c3-1.d0))
+      b42 = c3/(c3-1.d0)
+      b43 = -2.d0/(c3-1.d0)
+
       ! Compute JacL, JacD, and JacU
       do ie = nets,nete
         dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
