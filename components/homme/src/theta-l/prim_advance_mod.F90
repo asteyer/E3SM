@@ -1535,14 +1535,13 @@ contains
       call linear_combination_of_elem(np1,1.d0,np1,a31*dt,nm1,elem,nets,nete) ! Stage 3 is in np1 
 
      !!! Calculate Stage4 = exp(Ldt)u_m + dt(a41*phi1(dtL)N(u_m) + a43*phi1(dtL)N(Stage3))
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call store_state(elem,nm1,nets,nete,stage3) ! N(stage3) is stoed in stage3
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a43*dt,nm1,elem,nets,nete)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
+      call store_state(elem,np1,nets,nete,stage3) ! N(stage3) is stored in stage3
+      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage3,elem,np1,nets,nete)
+      call apply_phi_func_new(phi_struct_Nstage3,3,1,elem,np1,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,n0,a43*dt,np1,elem,nets,nete)
       call retrieve_state(stage1,elem,nm1,nets,nete)
       call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,nm1,nets,nete)
       call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,nm1,nets,nete)
@@ -1557,8 +1556,8 @@ contains
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
       call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
       call linear_combination_of_elem(nm1,1.d0,np1,0.d0,nm1,elem,nets,nete) ! copy N(stage4) to nm1
-      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,np1,nets,nete)
+      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,nm1,nets,nete)
+      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,np1,nets,nete)
       call linear_combination_of_elem(np1,b42*dt,np1,b43*dt,nm1,elem,nets,nete)
 
       ! stage 3 term
@@ -1580,8 +1579,7 @@ contains
       call retrieve_state(stage1,elem,nm1,nets,nete)
       call apply_phi_func_new(phi_struct_Nstage1,3,3,elem,nm1,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,dt*b13,nm1,elem,nets,nete)
-      ! add expLdt*u
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
+      ! add expLdt*u which is in n0
       call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
  
  !==========================================================================================================
