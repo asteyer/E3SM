@@ -1814,6 +1814,80 @@ contains
       call linear_combination_of_elem(np1,1.d0,nm1,b13*dt,n0,elem,nets,nete)
 
  !==========================================================================================================
+    elseif (tstep_type == 30) then ! 2nd order ETD method with 4 stages; type 2
+      c2 = 1.d0/4.d0
+      c3 = 3.d0/4.d0 !c2 <= c3
+
+      ! Compute JacL, JacD, and JacU
+      do ie = nets,nete
+        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
+        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
+        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
+        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
+        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
+        JacL_elem(:,:,:,ie) = JacL(:,:,:)
+        JacU_elem(:,:,:,ie) = JacU(:,:,:)
+        JacD_elem(:,:,:,ie) = JacD(:,:,:)
+      end do
+
+     !!! Stage1 = u_m is in n0
+
+     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
+      ! Compute N(u_m) and store for later
+      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
+      call store_state(elem,np1,nets,nete,stage1)
+      ! phi_1(Ldtc2)N(stage1)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
+      ! add to exp(Ldtc2)u_m
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
+      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
+
+     !!! Calculate Stage3 = exp(Ldtc3)u_m + c3dt*phi1(c3dtL)N(Stage2)
+      ! compute N(stage2)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
+      ! phi_1(Ldtc3)N(stage2) and add to expLdtwphi
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,nm1,dt*c3,np1,elem,nets,nete) ! Stage 3 is in np1
+
+     !!! Calculate Stage4 = exp(Ldt)u_m + dt*phi1(dtL)N(Stage3)
+      ! compute N(stage3)
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
+      ! phi_1(Ldt)N(Stage3)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
+      ! add to expLdtwphi
+      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
+      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete) ! exp(Ldt)u_m is in nm1
+
+      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! Stage 4 is in np1
+
+     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage4))
+
+      ! stage 4 term
+      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
+
+      ! stage 1 term
+      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
+      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
+      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
+      ! + dt*phi_1(Ldt)N(stage1)
+      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
+      ! -dt*phi_2(Ldt)N(stage1)
+      call retrieve_state(stage1,elem,n0,nets,nete)
+      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
+      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
+
+ !==========================================================================================================
+
 
  !==========================================================================================================
     else
