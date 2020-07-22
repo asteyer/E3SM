@@ -2433,7 +2433,7 @@ contains
       call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,(c3-a32)*dt,nm1,elem,nets,nete)
 
-     !!! Calculate Stage4 = exp(Ldtc4)u_m + dt*((c4-a43)phi1(c4dtL)N(Stage1) + a43phi1(c4dtL)N(Stage3))
+     !!! Calculate Stage4 = exp(Ldtc4)u_m + dt*((c4-a43)phi1(c4dtL)N(Stage2) + a43phi1(c4dtL)N(Stage3))
       ! compute N(stage3)
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
@@ -2443,8 +2443,8 @@ contains
       call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c4*dt,nets,nete)
       call linear_combination_of_elem(np1,1.d0,nm1,a43*dt,np1,elem,nets,nete)
-      ! (c4-a43)dt*phi_1(Ldtc4)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,nm1,nets,nete)
+      ! (c4-a43)dt*phi_1(Ldtc4)N(stage2) and add to other terms
+      call retrieve_state(stage2,elem,nm1,nets,nete)
       call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,nm1,elem,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,(c4-a43)*dt,nm1,elem,nets,nete)
 
