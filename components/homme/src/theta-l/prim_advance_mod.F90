@@ -2077,7 +2077,6 @@ contains
       ! Compute N(Stage2) and store for later
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2) ! N(Stage2) is stored in stage2
       ! phi_1(Ldtc3)N(stage2)
       call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
       ! add to exp(Ldtc3)u_m
@@ -2101,6 +2100,7 @@ contains
       ! compute N(stage4)
       call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c4*dt)
+      call store_state(elem,np1,nets,nete,stage4)
       ! phi_1(Ldt)N(stage4) and add to expLdtwphi
       call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
       call apply_phi_func_new(phi_struct_Nstage4,3,1,elem,np1,nets,nete)
