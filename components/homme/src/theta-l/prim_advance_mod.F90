@@ -2457,10 +2457,9 @@ contains
       call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
       call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
       call linear_combination_of_elem(np1,1.d0,nm1,a54*dt,np1,elem,nets,nete)
-      ! (1-a54)dt*phi_1(Ldt)N(stage1) and add to other terms
+      ! (1-a54)dt*phi_1(Ldt)N(stage3) and add to other terms
       call retrieve_state(stage3,elem,n0,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
+      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,n0,elem,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,(1.d0-a54)*dt,n0,elem,nets,nete)
 
      ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage5))
@@ -2475,6 +2474,7 @@ contains
       ! get phi function for phi_k(Ldt)N(stage1), k=1:3
       call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
       ! + dt*phi_1(Ldt)N(stage1)
+      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
       call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
       call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
       ! -dt*phi_2(Ldt)N(stage1)
