@@ -2711,7 +2711,7 @@ contains
 
       ! dependent variables
       a31 = c3-a32
-      a43 = c4*c4/(2.d0*c3)
+      a43 = c4*(c4-2.d0*c2)/(2.d0*(c3-c2))
       a42 = c4-a43
       a54 = (1.d0-2.d0*c3)/(2.d0*(c4-c3)) 
       a53 = 1.d0-a54
