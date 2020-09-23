@@ -52,6 +52,7 @@ Module dyn_comp
   !  JPE  06.05.31:  created
   !  Aaron Donahue 17.04.11: Fixed bug in write_grid_mapping which caused 
   !       a segmentation fault when dyn_npes<npes
+  !  MT 2020.06.30: remove write_grid_mapping - moved to homme/src/tool
   !
   !----------------------------------------------------------------------
 
@@ -84,22 +85,21 @@ CONTAINS
 
     use pmgrid,              only: dyndecomp_set
     use dyn_grid,            only: dyn_grid_init, elem, get_dyn_grid_parm,&
-                                   set_horiz_grid_cnt_d, define_cam_grids
+                                   set_horiz_grid_cnt_d, define_cam_grids,&
+                                   fv_physgrid_init, fv_nphys
     use rgrid,               only: fullgrid
     use spmd_utils,          only: mpi_integer, mpicom, mpi_logical
     use spmd_dyn,            only: spmd_readnl
-    use native_mapping,      only: create_native_mapping_files, native_mapping_readnl
     use time_manager,        only: get_nstep, dtime
 
     use dimensions_mod,   only: globaluniquecols, nelem, nelemd, nelemdmax
     use prim_driver_mod,  only: prim_init1
     use parallel_mod,     only: par, initmp
     use namelist_mod,     only: readnl
-    use control_mod,      only: runtype, qsplit, rsplit
+    use control_mod,      only: runtype, qsplit, rsplit, dt_tracer_factor, dt_remap_factor, &
+         timestep_make_eam_parameters_consistent, moisture, use_moisture
     use time_mod,         only: tstep
-    use phys_control,     only: use_gw_front
-    use physics_buffer,   only: pbuf_add_field, dtype_r8
-    use ppgrid,           only: pcols, pver
+    use cam_control_mod,  only: moist_physics
     use cam_abortutils,   only : endrun
 
     ! PARAMETERS:
@@ -108,20 +108,13 @@ CONTAINS
     type (dyn_import_t), intent(OUT) :: dyn_in
     type (dyn_export_t), intent(OUT) :: dyn_out
 
-    integer :: neltmp(3)
+    integer :: neltmp(3), ierr, nstep_factor
     integer :: npes_se
     integer :: npes_se_stride
 
     !----------------------------------------------------------------------
 
-    if (use_gw_front) then
-       call pbuf_add_field("FRONTGF", "global", dtype_r8, (/pcols,pver/), &
-            frontgf_idx)
-       call pbuf_add_field("FRONTGA", "global", dtype_r8, (/pcols,pver/), &
-            frontga_idx)
-    end if
-
-    ! Initialize dynamics grid
+    ! Initialize dynamics grid variables
     call dyn_grid_init()
 
     ! Read in the number of tasks to be assigned to SE (needed by initmp)
@@ -134,6 +127,9 @@ CONTAINS
 
     ! override the setting in the SE namelist, it's redundant anyway
     if (.not. is_first_step()) runtype = 1
+    use_moisture = moist_physics
+    moisture='dry'
+    if (use_moisture) moisture='wet'
 
     ! Initialize hybrid coordinate arrays.
     call hycoef_init(fh)
@@ -159,12 +155,15 @@ CONTAINS
 
        neltmp(1) = nelemdmax
        neltmp(2) = nelem
-       neltmp(3) = get_dyn_grid_parm('plon')
+       neltmp(3) = GlobalUniqueCols ! get_dyn_grid_parm('plon')
     else
        nelemd = 0
        neltmp(1) = 0
        neltmp(2) = 0
        neltmp(3) = 0
+       allocate(elem(nelemd))
+       dyn_in%elem => elem
+       dyn_out%elem => elem
     endif
 
     dyndecomp_set = .true.
@@ -181,14 +180,6 @@ CONTAINS
        endif
     endif
 
-
-    !
-    ! This subroutine creates mapping files using SE basis functions if requested
-    !
-    call native_mapping_readnl(NLFileName)
-    call create_native_mapping_files( par, elem,'native')
-    call create_native_mapping_files( par, elem,'bilin')
-
     ! Dynamics timestep
     !
     !  Note: dtime = progress made in one timestep.  value in namelist
@@ -196,15 +187,17 @@ CONTAINS
     !        tstep = the dynamics timestep:  
     !
 
-    if (rsplit==0) then
-       ! non-lagrangian code
-       tstep = dtime/real(se_nsplit*qsplit,r8)
-       TimeLevel%nstep = get_nstep()*se_nsplit*qsplit
-   else
-      ! lagrangian code
-       tstep = dtime/real(se_nsplit*qsplit*rsplit,r8)
-       TimeLevel%nstep = get_nstep()*se_nsplit*qsplit*rsplit
-    endif
+    ! Ignore ierr, as on error, timestep_make_eam_parameters_consistent defaults
+    ! to printing an error and then aborting.
+    ierr = timestep_make_eam_parameters_consistent(par, dt_remap_factor, dt_tracer_factor, &
+         se_nsplit, nstep_factor, tstep, dtime)
+    tstep = dtime/real(nstep_factor,r8)
+    TimeLevel%nstep = get_nstep()*nstep_factor
+
+    ! Initialize FV physics grid variables
+    if (fv_nphys > 0) then
+      call fv_physgrid_init()
+    end if
 
     ! Define the CAM grids (this has to be after dycore spinup).
     ! Physics-grid will be defined later by phys_grid_init
@@ -223,13 +216,14 @@ CONTAINS
 
   subroutine dyn_init2(dyn_in)
     use dimensions_mod,   only: nlev, nelemd, np
+    use dyn_grid,         only: fv_nphys
     use prim_driver_mod,  only: prim_init2
-    use prim_si_mod,  only: prim_set_mass
+    use prim_si_mod,      only: prim_set_mass
     use hybrid_mod,       only: hybrid_create
     use hycoef,           only: ps0
     use parallel_mod,     only: par
     use time_mod,         only: time_at
-    use control_mod,      only: moisture, runtype
+    use control_mod,      only: runtype
     use cam_control_mod,  only: aqua_planet, ideal_phys, adiabatic
     use comsrf,           only: landm, sgh, sgh30
     use cam_instance,     only: inst_index
@@ -242,7 +236,7 @@ CONTAINS
     integer :: ithr, nets, nete, ie, k, tlev
     real(r8), parameter :: Tinit=300.0_r8
     type(hybrid_t) :: hybrid
-    real(r8) :: temperature(np,np,nlev)
+    real(r8) :: temperature(np,np,nlev),ps(np,np)
 
     elem  => dyn_in%elem
 
@@ -261,10 +255,8 @@ CONTAINS
        nete=dom_mt(ithr)%end
        hybrid = hybrid_create(par,ithr,hthreads)
 
-       moisture='moist'
 
        if(adiabatic) then
-          moisture='dry'
           if(runtype == 0) then
              do ie=nets,nete
                 elem(ie)%state%q(:,:,:,:)=0.0_r8
@@ -272,7 +264,6 @@ CONTAINS
              end do
           end if
        else if(ideal_phys) then
-          moisture='dry'
           if(runtype == 0) then
              do ie=nets,nete
                 elem(ie)%state%ps_v(:,:,:) =ps0
@@ -284,7 +275,8 @@ CONTAINS
                 elem(ie)%state%q(:,:,:,:)=0.0_r8
 
                 temperature(:,:,:)=0.0_r8
-                call set_thermostate(elem(ie),temperature,hvcoord)
+                ps=ps0
+                call set_thermostate(elem(ie),ps,temperature,hvcoord)
 
              end do
           end if
@@ -318,9 +310,6 @@ CONTAINS
 #endif
     end if
 
-    if (inst_index == 1) then
-       call write_grid_mapping(par, elem)
-    end if
 
   end subroutine dyn_init2
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -393,66 +382,6 @@ CONTAINS
   !-----------------------------------------------------------------------
 
 
-
-  subroutine write_grid_mapping(par, elem)
-    use parallel_mod,     only: parallel_t
-    use element_mod, only : element_t
-    use cam_pio_utils, only : cam_pio_createfile, pio_subsystem
-    use pio, only : file_desc_t, pio_def_dim, var_desc_t, pio_int, pio_def_var, &
-         pio_enddef, pio_closefile, pio_initdecomp, io_desc_t, pio_write_darray, &
-         pio_freedecomp, pio_setdebuglevel
-    use dimensions_mod, only : np, nelem, nelemd
-    use dof_mod, only : createmetadata
-
-    type(parallel_t) :: par
-    type(element_t) :: elem(:)
-    type(file_desc_t) :: nc
-    type(var_desc_t) :: vid
-    type(io_desc_t) :: iodesc
-    integer :: dim1, dim2, ierr, i, j, ie, cc, base, ii, jj
-    integer, parameter :: npm12 = (np-1)*(np-1)
-    integer :: subelement_corners(npm12*nelemd,4)
-    integer :: dof(npm12*nelemd*4)
-
-
-    ! Create a CS grid mapping file for postprocessing tools
-
-    ! write meta data for physics on GLL nodes
-    call cam_pio_createfile(nc, 'SEMapping.nc')
-
-    ierr = pio_def_dim(nc, 'ncenters', npm12*nelem, dim1)
-    ierr = pio_def_dim(nc, 'ncorners', 4, dim2)
-    ierr = pio_def_var(nc, 'element_corners', PIO_INT, (/dim1,dim2/),vid)
-
-    ierr = pio_enddef(nc)
-    if (par%dynproc) then
-       call createmetadata(par, elem, subelement_corners)
-    end if
-
-    jj=0
-    do cc=0,3
-       do ie=1,nelemd
-          base = ((elem(ie)%globalid-1)+cc*nelem)*npm12
-          ii=0
-          do j=1,np-1
-             do i=1,np-1
-                ii=ii+1
-                jj=jj+1
-                dof(jj) = base+ii
-             end do
-          end do
-       end do
-    end do
-
-    call pio_initdecomp(pio_subsystem, pio_int, (/nelem*npm12,4/), dof, iodesc)
-
-    call pio_write_darray(nc, vid, iodesc, reshape(subelement_corners,(/nelemd*npm12*4/)), ierr)
-
-    call pio_freedecomp(nc, iodesc)
-
-    call pio_closefile(nc)
-
-  end subroutine write_grid_mapping
 
 end module dyn_comp
 

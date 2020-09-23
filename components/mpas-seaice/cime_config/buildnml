@@ -43,6 +43,8 @@ def buildnml(case, caseroot, compname):
     run_type         = case.get_value("RUN_TYPE")
     run_refdate      = case.get_value("RUN_REFDATE")
     run_reftod       = case.get_value("RUN_REFTOD")
+    ncpl_base_period = case.get_value("NCPL_BASE_PERIOD")
+    atm_ncpl         = case.get_value("ATM_NCPL")
     stream_name      = 'streams.seaice'
 
     mpassiconf_dir = os.path.join(casebuild, "mpassiconf")
@@ -101,6 +103,12 @@ def buildnml(case, caseroot, compname):
         grid_prefix += 'seaiceEC60to30v3wLI60lev.restart_theta_year26'
         decomp_date += '170905'
         decomp_prefix += 'mpas-cice.graph.info.'
+    elif ice_grid == 'ECwISC30to60E1r2':
+        grid_date += '200408'
+        grid_prefix += 'seaice.ECwISC30to60E1r2'
+        decomp_date += '200408'
+        decomp_prefix += 'mpas-o.graph.info.'
+        data_iceberg_file += 'Iceberg_Interannual_Merino_ECwISC30to60E1r2.nc'
     elif ice_grid == 'mpas120':
         grid_date += '121116'
         grid_prefix += 'cice120km'
@@ -177,11 +185,31 @@ def buildnml(case, caseroot, compname):
         grid_prefix += 'seaice.ARRM60to10'
         decomp_date += '180723'
         decomp_prefix += 'mpas-cice.graph.info.'
+    elif ice_grid == 'oARRM60to10_ICG':
+        grid_date += '200422'
+        grid_prefix += 'seaice.ARRM60to10.restart_grizzly'
+        decomp_date += '180723'
+        decomp_prefix += 'mpas-cice.graph.info.'
     elif ice_grid == 'oARRM60to6':
         grid_date += '180803'
         grid_prefix += 'seaice.ARRM60to6'
         decomp_date += '180820'
         decomp_prefix += 'mpas-cice.graph.info.'
+    elif ice_grid == 'EC30to60E2r2':
+        grid_date += '200908'
+        grid_prefix += 'seaice.EC30to60E2r2'
+        decomp_date += '200908'
+        decomp_prefix += 'mpas-seaice.graph.info.'
+    elif ice_grid == 'EC30to60E2r2_ICG':
+        grid_date += '200910'
+        grid_prefix += 'mpassi.EC30to60E2r2.rstFromG-anvil'
+        decomp_date += '200908'
+        decomp_prefix += 'mpas-seaice.graph.info.'
+    elif ice_grid == 'EC30to60E2r2-1900_ICG':
+        grid_date += '200910'
+        grid_prefix += 'mpassi.EC30to60E2r2-1900.rstFromG-anvil'
+        decomp_date += '200908'
+        decomp_prefix += 'mpas-seaice.graph.info.'
 
 
     #--------------------------------------------------------------------
@@ -200,6 +228,8 @@ def buildnml(case, caseroot, compname):
 
     with open(os.path.join(casebuild, "mpassi.input_data_list"), "w") as input_list:
         input_list.write("mesh = {}\n".format(input_file))
+        input_list.write("snow_data = {}/ice/mpas-cice/general/snicar_drdt_bst_fit_60_c04262019.nc\n".format(din_loc_root))
+        input_list.write("snicar_data = {}/ice/mpas-cice/general/snicar_optics_5bnd_snow_and_aerosols.nc\n".format(din_loc_root))
         if points_file != '':
             input_list.write("points = {}/ice/mpas-cice/{}/{}\n".format(din_loc_root, ice_mask, points_file))
         if iceberg_mode == 'data':
@@ -231,9 +261,23 @@ def buildnml(case, caseroot, compname):
         # create mpassiconf/cesm_namelist
         # -----------------------------------------------------
 
+        if ncpl_base_period == 'year':
+            config_dt = ( 3600 * 24 * 365 ) // atm_ncpl
+        elif ncpl_base_period == 'day':
+            config_dt = ( 3600 * 24 ) // atm_ncpl
+        elif ncpl_base_period == 'hour':
+            config_dt = ( 3600 ) // atm_ncpl
+        else:
+            logger.warning("WARNING: {} is being used".format(ncpl_base_period))
+
+        config_dt = float(config_dt)
+        infile_text = ""
+        infile_text += " config_dt = {} \n".format(config_dt)
+
         create_namelist_infile(case,
                                "{}/user_nl_mpassi{}".format(caseroot, inst_string),
-                               "{}/cesm_namelist".format(mpassiconf_dir))
+                               "{}/cesm_namelist".format(mpassiconf_dir),
+                               infile_text=infile_text)
 
         # -----------------------------------------------------
         # call build-namelist- output will go in $CASEBUILD/mpassiconf/mpassi_in
@@ -400,6 +444,20 @@ def buildnml(case, caseroot, compname):
         lines.append('                  filename_interval="none"')
         lines.append('                  input_interval="none" />')
         lines.append('')
+        lines.append('<immutable_stream name="SnowAgingPropertiesInput"')
+        lines.append('                  type="input"')
+        lines.append('                  io_type="{}"'.format(ice_pio_typename))
+        lines.append('                  filename_template="{}/ice/mpas-cice/general/snicar_drdt_bst_fit_60_c04262019.nc"'.format(din_loc_root))
+        lines.append('                  filename_interval="none"')
+        lines.append('                  input_interval="initial_only" />')
+        lines.append('')
+        lines.append('<immutable_stream name="SnicarInput"')
+        lines.append('                  type="input"')
+        lines.append('                  io_type="{}"'.format(ice_pio_typename))
+        lines.append('                  filename_template="{}/ice/mpas-cice/general/snicar_optics_5bnd_snow_and_aerosols.nc"'.format(din_loc_root))
+        lines.append('                  filename_interval="none"')
+        lines.append('                  input_interval="initial_only" />')
+        lines.append('')
         lines.append('<immutable_stream name="abort_contents"')
         lines.append('                  type="none"')
         lines.append('                  filename_template="abort_variables.nc" />')
@@ -556,6 +614,7 @@ def buildnml(case, caseroot, compname):
         lines.append('')
         lines.append('<stream name="timeSeriesStatsDailyOutput"')
         lines.append('        type="output"')
+        lines.append('        precision="single"')
         lines.append('        io_type="{}"'.format(ice_pio_typename))
         lines.append('        filename_template="mpassi.hist.am.timeSeriesStatsDaily.$Y-$M-$D.nc"')
         lines.append('        filename_interval="00-01-00_00:00:00"')
@@ -563,6 +622,43 @@ def buildnml(case, caseroot, compname):
         lines.append('        output_interval="00-00-01_00:00:00"')
         lines.append('        clobber_mode="truncate"')
         lines.append('        packages="timeSeriesStatsDailyAMPKG">')
+        lines.append('')
+        lines.append('    <var name="icePresent"/>')
+        lines.append('    <var name="iceAreaCell"/>')
+        lines.append('    <var name="iceVolumeCell"/>')
+        lines.append('    <var name="snowVolumeCell"/>')
+        lines.append('    <var name="iceAreaCategory"/>')
+        lines.append('    <var name="iceVolumeCategory"/>')
+        lines.append('    <var name="snowVolumeCategory"/>')
+        lines.append('    <var name="uVelocityGeo"/>')
+        lines.append('    <var name="vVelocityGeo"/>')
+        lines.append('    <var name="divergence"/>')
+        lines.append('    <var name="shear"/>')
+        lines.append('    <var name="shortwaveDown"/>')
+        lines.append('    <var name="longwaveDown"/>')
+        lines.append('    <var name="icePressure"/>')
+        lines.append('    <var name="principalStress1Var"/>')
+        lines.append('    <var name="principalStress2Var"/>')
+        lines.append('    <var name="broadbandAlbedo"/>')
+        lines.append('    <var name="absorbedShortwaveFluxInitialArea"/>')
+        lines.append('    <var name="latentHeatFluxInitialArea"/>')
+        lines.append('    <var name="sensibleHeatFluxInitialArea"/>')
+        lines.append('    <var name="longwaveUpInitialArea"/>')
+        lines.append('    <var name="evaporativeWaterFluxInitialArea"/>')
+        lines.append('    <var name="oceanHeatFlux"/>')
+        lines.append('    <var name="oceanShortwaveFlux"/>')
+        lines.append('    <var name="meltPondAreaFinalArea"/>')
+        lines.append('    <var name="meltPondDepthFinalArea"/>')
+        lines.append('    <var name="oceanFreshWaterFlux"/>')
+        lines.append('    <var name="oceanSaltFlux"/>')
+        lines.append('    <var name="freezingMeltingPotential"/>')
+        lines.append('    <var name="congelation"/>')
+        lines.append('    <var name="frazilFormation"/>')
+        lines.append('    <var name="snowiceFormation"/>')
+        lines.append('    <var name="snowMelt"/>')
+        lines.append('    <var name="surfaceIceMelt"/>')
+        lines.append('    <var name="basalIceMelt"/>')
+        lines.append('    <var name="lateralIceMelt"/>')
         lines.append('</stream>')
         lines.append('')
         lines.append('<stream name="timeSeriesStatsDailyRestart"')
@@ -579,6 +675,7 @@ def buildnml(case, caseroot, compname):
         lines.append('')
         lines.append('<stream name="timeSeriesStatsMonthlyOutput"')
         lines.append('        type="output"')
+        lines.append('        precision="single"')
         lines.append('        io_type="{}"'.format(ice_pio_typename))
         lines.append('        filename_template="mpassi.hist.am.timeSeriesStatsMonthly.$Y-$M-$D.nc"')
         lines.append('        filename_interval="00-01-00_00:00:00"')

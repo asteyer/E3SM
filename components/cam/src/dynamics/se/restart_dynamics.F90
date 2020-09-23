@@ -115,7 +115,7 @@ CONTAINS
     type(element_t), pointer :: elem(:)
     real(kind=r8) :: time
     integer :: ndcur, nscur
-    integer, pointer :: ldof(:)
+    integer(kind=pio_offset_kind), pointer :: ldof(:)
 
     call write_restart_hycoef(File)
 
@@ -135,7 +135,6 @@ CONTAINS
 
 #ifdef MODEL_THETA_L
     if( .not. theta_hydrostatic_mode ) then
-!what does pio decomp do? do i need ifdef, if here?
        ldof => get_restart_decomp(elem, nlevp)
        call PIO_InitDecomp(pio_subsystem, pio_double, (/nelem*np*np,nlevp/),ldof , iodesc3dp)
        deallocate(ldof)
@@ -327,8 +326,8 @@ CONTAINS
 #ifdef MODEL_THETA_L
     if( .not. theta_hydrostatic_mode ) then
        deallocate(var3dp)
+       call pio_freedecomp(File, iodesc3dp)
     endif
-    call pio_freedecomp(File, iodesc3dp)
 #endif
 
 
@@ -348,8 +347,9 @@ CONTAINS
   function get_restart_decomp(elem, lev) result(ldof)
     use element_mod, only : element_t
     use dimensions_mod, only : np, nelemd, nelem
+    use pio, only: pio_offset_kind
     type(element_t), intent(in) :: elem(:)
-    integer, pointer :: ldof(:)
+    integer(kind=pio_offset_kind), pointer :: ldof(:)
     integer, intent(in) :: lev
 
     integer ::  i, j, k, ie
@@ -360,12 +360,12 @@ CONTAINS
     do k=1,lev
        do ie=1,nelemd
           do i=1,np*np
-             ldof(j) = (elem(ie)%GlobalID-1)*np*np+(k-1)*nelem*np*np+i
+             ldof(j) = int(elem(ie)%GlobalID-1, pio_offset_kind)*np*np &
+                     + int(k-1, pio_offset_kind)*nelem*np*np + i
              j=j+1
           end do
        end do
     end do
-
 
   end function get_restart_decomp
 
@@ -379,7 +379,12 @@ CONTAINS
     use pio, only : file_desc_t, pio_global, pio_double, pio_offset_kind, &
          pio_get_att, pio_inq_dimid, pio_inq_dimlen, pio_initdecomp, pio_inq_varid, &
          pio_read_darray, pio_setframe, file_desc_t, io_desc_t, pio_double
-    use dyn_comp, only : dyn_init1, dyn_init2
+    use dyn_comp, only : dyn_init1, dyn_init2, frontgf_idx, frontga_idx
+    use phys_grid, only: phys_grid_init
+    use physpkg, only: phys_register
+    use phys_control, only: use_gw_front
+    use physics_buffer, only: pbuf_add_field, dtype_r8
+    use ppgrid, only: pcols, pver
     use dimensions_mod, only : nlev, nlevp, np, ne, nelemd, qsize_d
     use cam_abortutils,   only: endrun
     use namelist_mod, only: readnl
@@ -401,7 +406,7 @@ CONTAINS
     real(r8), allocatable :: var3d(:), var3dp(:), var2d(:)
     integer :: ie, ierr, fne, fnp, fnlev
     integer :: ncols
-    integer, pointer :: ldof(:)
+    integer(kind=pio_offset_kind), pointer :: ldof(:)
     type(element_t), pointer :: elem(:)               ! pointer to dyn_in element array
     integer(kind=pio_offset_kind), parameter :: t = 1
     integer :: i, k, cnt, st, en, tl, tlQdp, ii, jj, s2d, q, j
@@ -415,6 +420,21 @@ CONTAINS
 !is hy restart run from nh ok?
 
     call dyn_init1(file, NLFileName, dyn_in, dyn_out)
+
+    ! Define physics data structures
+    if(par%masterproc  ) write(iulog,*) 'Running phys_grid_init()'
+    call phys_grid_init()
+
+    ! Initialize index values for advected and non-advected tracers
+    call phys_register()
+
+    ! Frontogenesis indices
+    if (use_gw_front) then
+       call pbuf_add_field("FRONTGF", "global", dtype_r8, (/pcols,pver/), &
+            frontgf_idx)
+       call pbuf_add_field("FRONTGA", "global", dtype_r8, (/pcols,pver/), &
+            frontga_idx)
+    end if
 
    if (par%dynproc) then
     elem=>dyn_in%elem
@@ -463,8 +483,8 @@ CONTAINS
 #ifdef MODEL_THETA_L
     if ( .not. theta_hydrostatic_mode ) then
        allocate(var3dp(s2d*nlevp))
+       var3dp = 0.0
     endif
-    var3dp = 0.0
 
     ldof => get_restart_decomp(elem, nlevp)
     call PIO_InitDecomp(pio_subsystem, pio_double, (/ncols,nlevp/),ldof , iodesc3dp)
@@ -605,7 +625,12 @@ CONTAINS
     end do
 
 #ifdef MODEL_THETA_L
-    if ( .not. theta_hydrostatic_mode )then
+    if ( theta_hydrostatic_mode ) then
+       do ie=1,nelemd
+          elem(ie)%state%w_i = 0
+          elem(ie)%state%phinh_i = 0
+       end do       
+    else
        call pio_setframe(File,Wdesc, t)
        call pio_read_darray(File, Wdesc, iodesc3dp, var3dp, ierr)
        cnt=0
@@ -637,6 +662,9 @@ CONTAINS
     endif
 #endif
 
+    do ie = 1,nelemd
+       elem(ie)%state%Qdp = 0
+    end do
     do q=1,qsize_d
        call pio_setframe(File,qdesc(q), t)
        call pio_read_darray(File, qdesc(q), iodesc3d, var3d, ierr)

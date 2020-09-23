@@ -9,13 +9,15 @@
 !  2018/8 TOM sponge layer scaling from P. Lauritzen
 !  09/2018: O. Guba  code for new ftypes
 !  2018/12: M. Taylor apply forcing assuming nearly constant p 
+!  2019/5:  M. Taylor time-split TOM dissipation and hyperviscsity
+!  2019/7:  M. Taylor add dp3d limiter to prevent zero thickness layers
 !
 module prim_advance_mod
 
   use bndry_mod,          only: bndry_exchangev
   use control_mod,        only: dcmip16_mu, dcmip16_mu_s, hypervis_order, hypervis_subcycle,&
     integration, nu, nu_div, nu_p, nu_s, nu_top, prescribed_wind, qsplit, rsplit, test_case,&
-    theta_hydrostatic_mode, tstep_type, use_moisture, ftype, theta_advect_form
+    theta_hydrostatic_mode, tstep_type, theta_advect_form, hypervis_subcycle_tom
   use derivative_mod,     only: derivative_t, divergence_sphere, gradient_sphere, laplace_sphere_wk,&
     laplace_z, vorticity_sphere, vlaplace_sphere_wk 
   use derivative_mod,     only: subcell_div_fluxes, subcell_dss_fluxes
@@ -23,19 +25,20 @@ module prim_advance_mod
   use edge_mod,           only: edge_g, edgevpack_nlyr, edgevunpack_nlyr
   use edgetype_mod,       only: EdgeBuffer_t,  EdgeDescriptor_t, edgedescriptor_t
   use element_mod,        only: element_t
-  use element_state,      only: max_itercnt_perstep,avg_itercnt,max_itererr_perstep, nu_scale_top
-  use element_ops,        only: get_temperature, set_theta_ref, state0, get_R_star
-  use eos,                only: pnh_and_exner_from_eos,phi_from_eos,get_dirk_jacobian, get_exp_jacobian
+  use element_state,      only: nu_scale_top, nlev_tom, max_itercnt, max_deltaerr,max_reserr
+  use element_ops,        only: set_theta_ref, state0, get_R_star
+  use eos,                only: pnh_and_exner_from_eos,pnh_and_exner_from_eos2,phi_from_eos
   use hybrid_mod,         only: hybrid_t
   use hybvcoord_mod,      only: hvcoord_t
   use kinds,              only: iulog, real_kind
   use perf_mod,           only: t_adj_detailf, t_barrierf, t_startf, t_stopf ! _EXTERNAL
   use parallel_mod,       only: abortmp, global_shared_buf, global_shared_sum, iam, parallel_t
-  use physical_constants, only: Cp, cp, cpwater_vapor, g, kappa, Rgas, Rwater_vapor, p0 
+  use physical_constants, only: Cp, cp, cpwater_vapor, g, kappa, Rgas, Rwater_vapor, p0, TREF
   use physics_mod,        only: virtual_specific_heat, virtual_temperature
   use prim_si_mod,        only: preq_vertadv_v1
   use reduction_mod,      only: parallelmax, reductionbuffer_ordered_1d_t
   use time_mod,           only: timelevel_qdp, timelevel_t
+  use prim_state_mod,     only: prim_diag_scalars, prim_energy_halftimes
 #ifndef CAM
   use test_mod,           only: set_prescribed_wind
 #endif
@@ -74,9 +77,16 @@ contains
 
 
 
-#ifndef ARKODE
   !_____________________________________________________________________
   subroutine prim_advance_exp(elem, deriv, hvcoord, hybrid,dt, tl,  nets, nete, compute_diagnostics)
+    use imex_mod, only: compute_stage_value_dirk
+#ifdef ARKODE
+    use arkode_mod,     only: parameter_list, evolve_solution, &
+                              calc_nonlinear_stats, update_nonlinear_stats, &
+                              rel_tol, abs_tol
+    use arkode_tables,  only: table_list, butcher_table_set, set_Butcher_tables
+    use iso_c_binding
+#endif
 
     type (element_t),      intent(inout), target :: elem(:)
     type (derivative_t),   intent(in)            :: deriv
@@ -91,47 +101,17 @@ contains
     real (kind=real_kind) :: dt2, time, dt_vis, x, eta_ave_w
     real (kind=real_kind) :: itertol,a1,a2,a3,a4,a5,a6,ahat1,ahat2
     real (kind=real_kind) :: ahat3,ahat4,ahat5,ahat6,dhat1,dhat2,dhat3,dhat4
-    real (kind=real_kind) ::  gamma,delta
+    real (kind=real_kind) ::  gamma,delta,ap,aphat,dhat5,offcenter
 
     integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
     integer :: n,i,j,maxiter
- ! New variables that I am adding.
-    real (kind=real_kind) :: stage1(nets:nete,np,np,nlevp,6),&
-                                stage2(nets:nete,np,np,nlevp,6),&
-                                stage3(nets:nete,np,np,nlevp,6),&
-                                stage4(nets:nete,np,np,nlevp,6),&
-                                exp_um(nets:nete,np,np,nlevp,6),&
-                                sum_part1(nets:nete,np,np,nlevp,6)
-    real (kind=real_kind) :: a21,a31,a32,a41,a42,a43,a51,a53,a54,a65,a61,c2,c3,c4,c5,b1,b2,b3,b4,&
-                             b12,b13,b22,b23,b32,b33,b42,b43,b52,b53
-    real (kind=real_kind) :: wphivec(2*nlev)
-    real (kind=real_kind) :: Lu(2*nlev,np,np,nete-nets+1)
-    real (kind=real_kind), pointer, dimension(:,:,:) :: w_n0
-    real (kind=real_kind), pointer, dimension(:,:,:) :: phi_n0
-    real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
-    real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
-    real (kind=real_kind), pointer, dimension(:,:,:)   :: vtheta_dp
-    real (kind=real_kind), pointer, dimension(:,:)   :: phis
-    real (kind=real_kind) :: expJ(2*nlev, 2*nlev), iden(2*nlev,2*nlev)
-    real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
-    real (kind=real_kind) :: JacU(nlev-1,np,np)
-    real (kind=real_kind) :: JacD_elem(nlev,np,np,nete-nets+1)
-    real (kind=real_kind) :: JacL_elem(nlev-1,np,np,nete-nets+1), JacU_elem(nlev-1,np,np,nete-nets+1)
-    real (kind=real_kind) :: pnh(np,np,nlev)     ! nh (nonydro) pressure
-    real (kind=real_kind) :: dp3d_i(np,np,nlevp)
-    real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
-    real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
-    real (kind=real_kind) :: dphi(nlev)
-    real (kind=real_kind) :: phi_k(2*nlev,np,np,nete-nets+1)
-    real (kind=real_kind) :: phi_deg1(np,np,2*nlev,nete-nets+1,1),phi_deg2(np,np,2*nlev,nete-nets+1,2),&
-                             phi_deg3(np,np,2*nlev,nete-nets+1,3)
-    real (kind=real_kind) :: phi_struct_Nstage1(np,np,2*nlev,nete-nets+1,3),&
-                             phi_struct_Nstage2(np,np,2*nlev,nete-nets+1,3), &
-                             phi_struct_Nstage3(np,np,2*nlev,nete-nets+1,3), &
-                             phi_struct_Nstage4(np,np,2*nlev,nete-nets+1,3), &
-                             phi_struct_Nstage5(np,np,2*nlev,nete-nets+1,3), &
-                             phi_struct(np,np,2*nlev,nete-nets+1,3)
-    integer :: ii
+
+#ifdef ARKODE 
+    type(parameter_list)    :: arkode_parameters
+    type(table_list)        :: arkode_table_list
+    type(butcher_table_set) :: arkode_table_set
+    integer(C_INT)          :: ierr
+#endif
 
     call t_startf('prim_advance_exp')
     nm1   = tl%nm1
@@ -144,18 +124,15 @@ contains
 
 ! integration = "explicit"
 !
-!   tstep_type=1  RK2 followed by qsplit-1 leapfrog steps        CFL=close to qsplit
-!                    typically requires qsplit=4 or 5
-!
-!   tstep_type=5  Kinnmark&Gray RK3 5 stage 3rd order            CFL=3.87  (sqrt(15))
+!   tstep_type=1  RK2
+!   tstep_type=4  Kinnmark&Gray RK 5 stage 2nd order            CFL=4.00
+!   tstep_type=5  Kinnmark&Gray RK 5 stage 3rd order            CFL=3.87  (sqrt(15))
 !                 From Paul Ullrich.  3rd order for nonlinear terms also
 !                 K&G method is only 3rd order for linear
-!                 optimal: for windspeeds ~120m/s,gravity: 340m/2
-!                 run with qsplit=1
-!                 (K&G 2nd order method has CFL=4. tiny CFL improvement not worth 2nd order)
-!   tstep_type=6  IMKG243a 
-!   tstep_type=7  IMKG254a
-!   tstep_type=8  IMKG252a
+!   tstep_type=7  KG5+BE      KG5(2nd order, 4.0CFL) + BE.  1st order max stability IMEX
+!   tstep_type=8  KG3+BE/CN   KG3 2nd order explicit, 1st order off-centering implicit
+!   tstep_type=9  KGU53+BE/CN KGU53 3rd order explicit, 2st order implicit
+!   tstep_type=10 KGU42+BE/optimized, from O. Guba
 !
 
 ! default weights for computing mean dynamics fluxes
@@ -194,13 +171,13 @@ contains
       call compute_andor_apply_rhs(np1,n0,n0,qn0,dt/4,elem,hvcoord,hybrid,&
             deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)
       call compute_andor_apply_rhs(np1,n0,np1,qn0,dt/6,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)
+            deriv,nets,nete,.false.,0d0,1.d0,1.d0,1.d0)
       call compute_andor_apply_rhs(np1,n0,np1,qn0,3*dt/8,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)
+            deriv,nets,nete,.false.,0d0,1.d0,1.d0,1.d0)
       call compute_andor_apply_rhs(np1,n0,np1,qn0,dt/2,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)
+            deriv,nets,nete,.false.,0d0,1.d0,1.d0,1.d0)
       call compute_andor_apply_rhs(np1,n0,np1,qn0,dt,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,eta_ave_w*1d0,1.d0,1.d0,1.d0)
+            deriv,nets,nete,.false.,eta_ave_w*1d0,1.d0,1.d0,1.d0)
 
 
 
@@ -237,3083 +214,234 @@ contains
        ! final method is the same as:
        ! u5 = u0 +  dt/4 RHS(u0)) + 3dt/4 RHS(u4)
 !=========================================================================================
-    elseif (tstep_type == 6) then  ! IMEX-KG243
- 
-      a1 = 1d0/4d0
-      a2 = 1d0/3d0
-      a3 = 1d0/2d0
-      a4 = 1d0
-
-      ahat4 = 1d0
-      ahat1 = 0d0
-      max_itercnt_perstep = 0
-      max_itererr_perstep = 0.0  
-      ! IMEX-KGNO243
-      dhat2 = (1.+sqrt(3.)/3.)/2.
-      dhat3 = dhat2
-      ahat3 = 1./2.-dhat3
-      dhat1 = (ahat3-dhat2+dhat2*dhat3)/(1.-dhat2-dhat3)
-      ahat2 = (dhat1-dhat1*dhat3-dhat1*dhat2+dhat1*dhat2*dhat3)/(1.-dhat3)
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt*a1,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-  
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
+    else if (tstep_type==7) then ! KG5(2nd order CFL=4) + BE  MAX STABILITY
+      a1=0d0
+      a2=1-a1
+      dt2=dt/4
+      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt2,elem,hvcoord,hybrid,&
+            deriv,nets,nete,compute_diagnostics,0d0,1.d0,0.d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,a1*dt2,np1,a2*dt2,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
- 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a2,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat2/a2,1d0)
 
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol) 
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a3,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
+      dt2=dt/6
+      call compute_andor_apply_rhs(nm1,n0,np1,qn0,dt2,elem,hvcoord,hybrid,&
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,a1*dt2,nm1,a2*dt2,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a4,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,1d0,ahat4/a4,1d0)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-
-!==============================================================================================
-    elseif (tstep_type == 7) then  ! imkg254, most robust of the methods
- 
-      max_itercnt_perstep = 0
-      max_itererr_perstep = 0.0
-
-      a1 = 1/4d0
-      a2 = 1/6d0
-      a3 = 3/8d0
-      a4 = 1/2d0
-      a5 = 1d0
-      ahat5 = 1d0
-
-      ! IMEX-KGO254 most stable coefficients
-      dhat2 = 1d0
-      dhat3 = 1d0
-      dhat4 = 2d0
-      ahat4 = 1d0/2d0-dhat4
-      dhat1= (ahat4*ahat5 - ahat5*dhat3 - ahat5*dhat2 + dhat3*dhat2+ dhat3*dhat4 + dhat2*dhat4)/&
-        (ahat5-dhat3-dhat2-dhat4)
-      ahat3 = (- ahat4*ahat5*dhat1 - ahat4*ahat5*dhat2+ ahat5*dhat1*dhat2 + ahat5*dhat1*dhat3 +&
-        ahat5*dhat2*dhat3- dhat1*dhat2*dhat3 - dhat1*dhat2*dhat4 - dhat1*dhat3*dhat4- &
-        dhat2*dhat3*dhat4)/(-ahat4*ahat5)
-      ahat2 = ( - ahat3*ahat4*ahat5*dhat1 + ahat4*ahat5*dhat1*dhat2 -&
-        ahat5*dhat1*dhat2*dhat3 + dhat1*dhat2*dhat3*dhat4)/(-ahat3*ahat4*ahat5)
-
-      ! Gets the Jacobian for testing matrix exponential
-      dp3d  => elem(1)%state%dp3d(:,:,:,n0)
-      vtheta_dp  => elem(1)%state%vtheta_dp(:,:,:,n0)
-      phi_np1 => elem(1)%state%phinh_i(:,:,:,n0)
-
-      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-
-      call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-
-!      print *, "The Jacobian is: "
-!      print *, "JacL = ", JacL(:,1,1)
-!      print *, "JacD = ", JacD(:,1,1)
-!      print *, "JacU = ", JacU(:,1,1)
-!      print *, "***************************************************************"
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,a1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
+      dt2=3*dt/8
+      call compute_andor_apply_rhs(np1,n0,nm1,qn0,dt2,elem,hvcoord,hybrid,&
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,a1*dt2,np1,a2*dt2,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat2/a2,1d0)
-      maxiter=10
-      itertol=1e-12
- 
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
+
+      dt2=dt/2
+      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt2,elem,hvcoord,hybrid,&
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,a1*dt2,np1,a2*dt2,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat4/a4,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a5*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,1d0,ahat5/a5,1d0)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-!================================================================================
-    elseif (tstep_type == 8) then ! IMKG253, might be more efficient than IMKG254, might be a teeny bit bad at coarse resolution
-
-      max_itercnt_perstep = 0
-      max_itererr_perstep = 0.0
-
-      a1 = 1/4d0
-      a2 = 1/6d0
-      a3 = 3/8d0
-      a4 = 1/2d0
-      a5 = 1d0
-      ahat5 = 1d0
-
-      dhat4 = 1d0
-      dhat3 = 1d0
-      ahat4 = -1d0/2d0
-      dhat2= (ahat4*ahat5 - ahat5*dhat1 - ahat5*dhat3 + dhat1*dhat3+ dhat1*dhat4 + dhat3*dhat4)/(ahat5-dhat1-dhat3-dhat4)
-      ahat3 = (-ahat4*ahat5*dhat2+ahat5*dhat2*dhat3- dhat2*dhat3*dhat4)/(-ahat4*ahat5)
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,a1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
- 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat4/a4,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a5*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,1d0,ahat5/a5,1d0)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-!================================================================================
-    elseif (tstep_type == 9) then ! IMKG252, use if feeling lucky, might be bad at coarse resolution
- 
-      max_itercnt_perstep = 0
-      max_itererr_perstep = 0.0
-
-      a1 = 1/4d0
-      a2 = 1/6d0
-      a3 = 3/8d0
-      a4 = 1/2d0
-      a5 = 1d0
-      ahat5 = 1d0
-
-      dhat3 = (2d0+sqrt(2d0))/2d0
-      dhat4 = (2d0+sqrt(2d0))/2d0
-      ahat4 = -(1d0+sqrt(2d0))/2d0
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,a1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0) 
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat4/a4,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a5*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,1d0,ahat5/a5,1d0)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-!================================================================================                                      
-    elseif (tstep_type == 10) then ! IMKG232b
-      a1 = 1d0/2d0
-      a2 = 1d0/2d0
-      a3 = 1d0
-      ahat3 = 1d0
-      dhat2 = .5d0*(2d0+sqrt(2d0))
-      dhat1 = dhat2
-      ahat2 = -(1d0+sqrt(2d0))/2d0
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt*a1,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)  
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a2,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat2/a2,1d0)
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol) 
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a3,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
-      ! Testing nonlinear_rhs
-       ! get Jacobian
-      do ie = nets,nete
-        dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1 => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL
-        JacU_elem(:,:,:,ie) = JacU
-        JacD_elem(:,:,:,ie) = JacD
-    
-      end do
-      call compute_nonlinear_rhs(nm1,nm1,n0,qn0,elem,hvcoord,hybrid,&
-          deriv,nets,nete,compute_diagnostics,0.d0,JacL_elem,JacD_elem,JacU_elem, dt)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-
-!===================================================================================
-    elseif (tstep_type == 11) then ! Integrating factor method
-      ! get Jacobian
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL
-        JacU_elem(:,:,:,ie) = JacU
-        JacD_elem(:,:,:,ie) = JacD
-      end do
-     ! Compute N(u_m) and store in np1
-      call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,& 
-          deriv,nets,nete,compute_diagnostics,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
-      call linear_combination_of_elem(np1,dt,np1,1.d0,n0,elem,nets,nete)
-      ! Compute dt*N(u_m) + u_m and store in np1
-        ! Compute e^(dt*Jac)(u_m+alpha*dt*N(u_m)) =: h2
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-      ! Compute N(h2) and store in nm1
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,compute_diagnostics,0.d0, JacL_elem, JacD_elem, JacU_elem,dt)
-     
-      ! (h3 = e^(dt*Jac)(u_m) +dt*N(h2))
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
-      call linear_combination_of_elem(np1,dt,nm1,1.d0,n0,elem,nets,nete)
-
-!==========================================================================================================
-    elseif (tstep_type == 12) then ! IMKG232b with a call to compute_nonlinear_rhs
-      a1 = 1d0/2d0
-      a2 = 1d0/2d0
-      a3 = 1d0
-      ahat3 = 1d0
-      dhat2 = .5d0*(2d0+sqrt(2d0))
-      dhat1 = dhat2
-      ahat2 = -(1d0+sqrt(2d0))/2d0
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt*a1,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)  
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a2,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat2/a2,1d0)
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol) 
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a3,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-
-     call compute_nonlinear_rhs(np1,np1,n0,qn0,elem,hvcoord,hybrid,&
-          deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)  !stores N(h1) in elem(np1)
-
-     call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,0.d0, JacL, JacD, JacU,dt)
-
-!===================================================================================
-    elseif (tstep_type == 13) then ! Integrating factor method
-      do ie = nets,nete
-      ! get Jacobian
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL
-        JacU_elem(:,:,:,ie) = JacU
-        JacD_elem(:,:,:,ie) = JacD
-        ! Copy elem(n0) to elem(nm1)
-      end do
-      call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1,elem,nets,nete)
-      ! Compute exp(Ldt)*v_m and store in nm1 
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      ! Compute N(h1) and store in np1
-      call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
-
- !    !!!!!!! Test nonlinear rhs
- !    ! - we have u stored in nm1; N(u) stored in np1; now we calculate F(u) and store in n0
- !    call compute_andor_apply_rhs(n0,nm1,nm1,qn0,1.d0,elem,hvcoord,hybrid,&
- !      deriv,nets,nete,compute_diagnostics,0.d0,1.d0,1.d0,0.d0)
- !      do ie = nets, nete
- !       ! subtract F(u) - N(u); store in np1
- !        call linear_combination_of_elem(np1, 1.d0, n0, -1.d0, np1, elem,nets,nte)
- !      ! Use expJ because it is the right size.
- !        do i = 1, np
- !          do j = 1, np
- !             expJ = 0.d0
- !             do ii = 1,nlev-1
- !               expJ(ii,ii+nlev) = JacD_elem(ii,i,j,ie)        
- !               expJ(ii+1,ii+nlev) = JacL_elem(ii,i,j,ie)
- !               expJ(ii,ii+1+nlev) = JacU_elem(ii,i,j,ie)
- !               expJ(ii+nlev,ii) = 1.d0
- !             end do 
- !           expJ(nlev,2*nlev) = JacD_elem(nlev,i,j,ie)
- !           expJ(2*nlev, nlev) = 1.d0
- !
- !           expJ = expJ*g
- !           
- !           wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,nm1)
- !           wphivec(nlev+1:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,nm1)
- !
- !           wphivec = matmul(expJ,wphivec)
- !           ! Subtract (F(u) - N(u)) - Lu -- should be 0.
- !           elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) - wphivec(1:nlev)
- !           elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,np1) - wphivec(nlev+1:2*nlev) 
- !           if (norm2(elem(ie)%state%w_i(i,j,1:nlev,np1)) > 10.d-5) then
- !             print *, " w error is ", norm2(elem(ie)%state%w_i(i,j,1:nlev,np1))
- !             stop
- !           end if
- !           if (norm2(elem(ie)%state%phinh_i(i,j,1:nlev,np1)) > 10.d-5) then
- !             print *, " phi error is ", norm2(elem(ie)%state%phinh_i(i,j,1:nlev,np1)) 
- !             stop
- !           end if
- !           if (norm2(elem(ie)%state%dp3d(i,j,:,np1)) > 10.d-5) then
- !             print *, "dp3d error is ", norm2(elem(ie)%state%dp3d(i,j,:,np1))
- !             stop
- !           end if
- !           if (norm2(elem(ie)%state%vtheta_dp(i,j,:,np1)) > 10.d-5) then
- !             print *, "dp3d error is ", norm2(elem(ie)%state%vtheta_dp(i,j,:,np1))
- !             stop
- !           end if
- !           if (norm2(elem(ie)%state%v(i,j,:,:,np1)) > 10.d-5) then
- !             print *, "dp3d error is ", norm2(elem(ie)%state%v(i,j,:,:,np1))
- !             stop
- !           end if
- !         end do
- !       end do
- !
- !     end do
- !     stop "nonlinear test success."
- !     !!!!!! End nonlinear test.
-
-      call linear_combination_of_elem(np1, 1.d0, nm1, dt, np1, elem,nets,nete)
- !     if (elem(ie)%state%phinh_i(i,j,1,np1) < elem(ie)%state%phinh_i(i,j,2,np1)) then
- !       print *, "*******************"
- !       print *, " phi error in h2 at ", ie, i,j
- !       stop
- !     end if
-      call compute_nonlinear_rhs(n0, np1, np1, qn0, elem, hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt) ! was np1,np1,np1
-      call linear_combination_of_elem(np1, 1.d0, nm1, dt, n0, elem, nets,nete) ! was np1 instead of n0
-      ! Compute exp(Ldt)*elem(np1) and store in np1.
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-
-!==========================================================================================================
-!===================================================================================
-    elseif (tstep_type == 14) then ! Forward Euler comparison.
-      do ie = nets,nete
-      ! get Jacobian
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-      
-      call linear_combination_of_elem(nm1, 1.d0, n0, 0.d0, nm1, elem,nets,nete)
-      ! Compute N(h1) and store in nm1
-      call compute_nonlinear_rhs(np1,nm1,nm1,qn0,elem,hvcoord,hybrid,&
-         deriv,nets,nete,compute_diagnostics, eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
-      call linear_combination_of_elem(np1,1.d0,n0,dt,np1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-      ! Standard Forward Euler, stored in nm1.
-      call compute_andor_apply_rhs(nm1,n0,n0,qn0,dt,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,0.d0,1.d0,1.d0,1.d0)
-!      ! compare forward euler steps:
-!      do ie = nets, nete
-!       print *, "ie", ie
-!       print *, "max values at nm1 (Standard FE)"
-!       print *, "vmaxmax", maxval(abs((elem(ie)%state%v(:,:,:,:,nm1))))
-!       print *, "vtheta_dpmax", maxval(abs(elem(ie)%state%vtheta_dp(:,:,:,nm1)))
-!       print *, "dp3dmax", maxval(abs(elem(ie)%state%dp3d(:,:,:,nm1)))
-!       print *, "wmax", maxval(abs(elem(ie)%state%w_i(:,:,:,nm1)))
-!       print *, "phimax", maxval(abs(elem(ie)%state%phinh_i(:,:,:,nm1)))
-!
-!       print *, "max values at np1"
-!       print *, "vmaxmax", maxval(abs((elem(ie)%state%v(:,:,:,:,np1))))
-!       print *, "vtheta_dpmax", maxval(abs(elem(ie)%state%vtheta_dp(:,:,:,np1)))
-!       print *, "dp3dmax", maxval(abs(elem(ie)%state%dp3d(:,:,:,np1)))
-!       print *, "wmax", maxval(abs(elem(ie)%state%w_i(:,:,:,np1)))
-!       print *, "phimax", maxval(abs(elem(ie)%state%phinh_i(:,:,:,np1)))
-!      end do
-
-!==========================================================================================================
-    else if (tstep_type == 15) then ! Andrew's FW Euler
-
-! first compute L in terms of JacL, JacD, JacL
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     ! compute N(v(n0)) and store at np1
-     call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,dt)
-
-     ! compute u(n0) + dt * N(u(n0)) and store at np1
-     call linear_combination_of_elem(np1,1d0,n0,dt,np1,elem,nets,nete)
-
-      do ie = nets,nete
-        do i = 1,np
-          do j = 1,np
-            ! grabs w and phi for linear operation
-            wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,np1)
-            wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,np1)
-            call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,expJ,wphivec)
-            ! update w and phi after matrix exponential
-            elem(ie)%state%w_i(i,j,1:nlev,np1)     = wphivec(1:nlev)
-            elem(ie)%state%phinh_i(i,j,1:nlev,np1) = wphivec(1+nlev:2*nlev)
-          end do
-        end do
-      end do
-
-
-
-!     do ie =nets,nete
-!
-!       print *, "ie", ie
-!       print *, "max values at n0"
-!       print *, "vmaxmax", maxval(abs((elem(ie)%state%v(:,:,:,:,n0))))
-!       print *, "vtheta_dpmax", maxval(abs(elem(ie)%state%vtheta_dp(:,:,:,n0)))
-!       print *, "dp3dmax", maxval(abs(elem(ie)%state%dp3d(:,:,:,n0)))
-!       print *, "wmax", maxval(abs(elem(ie)%state%w_i(:,:,:,n0)))
-!       print *, "phimax", maxval(abs(elem(ie)%state%phinh_i(:,:,:,n0)))
-!
-!       print *, "max values at np1"
-!       print *, "vmaxmax", maxval(abs((elem(ie)%state%v(:,:,:,:,np1))))
-!       print *, "vtheta_dpmax", maxval(abs(elem(ie)%state%vtheta_dp(:,:,:,np1)))
-!       print *, "dp3dmax", maxval(abs(elem(ie)%state%dp3d(:,:,:,np1)))
-!       print *, "wmax", maxval(abs(elem(ie)%state%w_i(:,:,:,np1)))
-!       print *, "phimax", maxval(abs(elem(ie)%state%phinh_i(:,:,:,np1)))
-!
-!    end do
-!==========================================================================================================
-!===================================================================================
-    elseif (tstep_type == 16) then ! Integrating factor method - second approach to 13
-       a1 = 1.d0/2.d0
-
-       ! Compute JacL, JacD, and JacU
-       do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-      
-
-      !! g1 = vm = um
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
-
-      !! Form g2 = vm + dt*N(vm) and store in np1
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call linear_combination_of_elem(np1,1.d0,n0,dt*a1,nm1,elem,nets,nete)
-
-      !! Form vmp1 = g3 = vm + dt*exp(-Ldt)N(exp(Ldt)g2)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*a1,nets,nete)
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,-dt*a1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,dt,nm1,elem,nets,nete)
-
-  !! Compute ump1 = exp(Ldt)vnmp  = exp(Ldt)g3
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-
-!==========================================================================================================
-    elseif (tstep_type == 17) then ! Second order RK method
-      a1 = 0.5d0
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-      !! g1 = v_m = u_m
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
-
-      !! g2 = vm + 1/2 dt N(v_m)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call linear_combination_of_elem(np1,1.d0,n0,a1*dt,np1,elem,nets,nete)
-
-      !! g3 = vm + 1/2 dt exp(-L*dt/2)N(exp(L*dt/2)*g2)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*a1,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*a1,nets,nete)
-      call linear_combination_of_elem(np1, 1.d0,n0,a1*dt,np1,elem,nets,nete)
-
-      !! g4 = vm + dt*exp(-Ldt/2)*N(exp(Ldt/2)g3)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*a1,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*a1)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*a1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,dt,np1,elem,nets,nete)
-
-      !! Ump1 = exp(Ldt)vmp1
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-!==========================================================================================================
-    elseif (tstep_type == 18) then ! Third order RK method
-      a21 = 1.d0/5.d0
-      a32 = 1.d0/5.d0
-      a43 = 1.d0/3.d0
-      a54 = 2.d0/3.d0
-      a61 = 1.d0/4.d0
-      a65 = 3.d0/4.d0
-      c2 = 1.d0/5.d0
-      c3 = 1.d0/5.d0
-      c4 = 1.d0/3.d0
-      c5 = 2.d0/3.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-      !! g1 = v_m = u_m
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete) ! move to np1
-
-      !! g2 = vm + a21*dt*N(v_m)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call linear_combination_of_elem(np1,1.d0,n0,a21*dt,np1,elem,nets,nete)
-
-      !! g3 = vm + a32*dt*exp(-L*dt*c2)N(exp(L*dt*c2)*g2)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*c2,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c2)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*c2,nets,nete)
-      call linear_combination_of_elem(np1, 1.d0,n0,a32*dt,np1,elem,nets,nete)
-
-      !! g4 = vm + a43*dt*exp(-Ldt*c3)*N(exp(L*dt*c3)g3)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*c3,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c3)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*c3,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,dt*a43,np1,elem,nets,nete)
-
-      !! g5 = vm + a54*dt*exp(-Ldt*c4)*N(exp(L*dt*c4)g4)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*c4,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c4)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*c4,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,dt*a54,np1,elem,nets,nete)
-
-      !! g6 = vm + a61*dt*N(g1)+a65*dt*exp(-Ldt*c5)*N(exp(L*dt*c5)g5)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*c5,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c5)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*c5,nets,nete)
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call linear_combination_of_elem(nm1,1.d0,n0,a61*dt,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a65*dt,np1,elem,nets,nete)
-
-      !! Ump1 = exp(Ldt)vmp1
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-
-!!==========================================================================================================
-    elseif (tstep_type == 19) then ! Fourth order RK method
-      a21 = 1.d0/2.d0
-      a32 = 1.d0/2.d0
-      a43 = 1.d0
-      c2  = 1.d0/2.d0
-      c3  = 1.d0/2.d0
-      c4  = 1.d0
-      b1  = 1.d0/6.d0
-      b2  = 1.d0/3.d0
-      b3  = 1.d0/3.d0
-      b4  = 1.d0/6.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-      !! g1 = v_m = u_m
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete) ! move to np1
-
-      !! g2 = vm + a21*dt*N(v_m)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      call linear_combination_of_elem(np1,1.d0,n0,a21*dt,np1,elem,nets,nete)
-
-      !! g3 = vm + a32*dt*exp(-L*dt*c2)N(exp(L*dt*c2)*g2)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*c2,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c2)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*c2,nets,nete)
-      call store_state(elem,np1,nets,nete,stage2)
-      call linear_combination_of_elem(np1, 1.d0,n0,a32*dt,np1,elem,nets,nete)
-
-      !! g4 = vm + a43*dt*exp(-Ldt*c3)*N(exp(L*dt*c3)g3)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*c3,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c3)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*c3,nets,nete)
-      call store_state(elem,np1,nets,nete,stage3)
-      call linear_combination_of_elem(np1,1.d0,n0,dt*a43,np1,elem,nets,nete)
-
-      !! Calculate exp(-Ldt*c4)*N(exp(L*dt*c4)g4)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt*c4,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt*c4)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,-dt*c4,nets,nete)
-      call store_state(elem,np1,nets,nete,stage4)
-
-      !! vmp1 = vm + b1*dt*N(g1) + b2*dt*exp(-Ldt*c2)*N(exp(Ldt*c2)g2) +
-      !             b3*dt*exp(-Ldt*c3)*N(exp(Ldt*c3)g3) + b4*dt*exp(-Ldt*c4)*N(exp(Ldt*c4)g4)
-           ! First, vm + b1 term
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,b1*dt,nm1,elem,nets,nete) 
-           ! Second, add b2 term
-      call retrieve_state(stage2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b2*dt,nm1,elem,nets,nete)
-           ! Add b3 term
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b3*dt,nm1,elem,nets,nete)
-           ! Add b4 term
-      call retrieve_state(stage4,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b4*dt,nm1,elem,nets,nete)
-
-      !! Ump1 = exp(Ldt)vmp1
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-
-!!==========================================================================================================
-!!==========================================================================================================
-    elseif (tstep_type == 20) then ! First order ETD Method
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete) ! move to np1
-      ! Compute N(u_m)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL_elem, JacD_elem, JacU_elem,0.d0)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
-
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,dt,np1,elem,nets,nete)
-
-!!==========================================================================================================
-!!==========================================================================================================
-    elseif (tstep_type == 21) then ! Second order ETD Method
-      c2 = 3.d0/4.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-      ! Stage1 = u_m is in n0
-      ! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-      ! Calculate Stage3 = exp(Ldt)u_m + dt[phi1(dtL)N(u_m;t_m)-1/c2phi2(dtL)N(u_m;t_m)+1/c2phi2(dtL)N(Stage2;tm+c2dt)]
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,dt/c2,np1,0.d0,n0,elem,nets,nete) ! dt/c2phi2(dtL)N(Stage2;tm+c2dt) is in np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,-dt/c2,nm1,1.d0,np1,elem,nets,nete) !Last two terms stored in np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,dt,nm1,1.d0,np1,elem,nets,nete) ! Last three terms stored in np1
-
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete)  ! Stage 3 stored in np1
-
-
-      ! Calculate ump1 = exp(Ldt)u_m + dt[phi1(dtL)N(um;tm)-phi2(dtL)N(um;tm)+phi2(dtL)N(Stage3;tm+dt)]
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! First and last terms stored in np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete) ! Second term added to np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,nm1,elem,nets,nete)
-
-
-
-!!==========================================================================================================
-    elseif (tstep_type == 22) then ! Second order ETD Method reformulated for efficiency
-      c2 = 3.d0/4.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-      ! Stage1 = u_m is in n0
-      ! Calculate for stage values: L_mu_m
-      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,n0,nets,nete,Lu)
-
-      ! Calculate Stage2 = u_m + c2dt*phi1(c2dtL)(N(u_m;t_m) + L_mu_m)
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
-      call add_Lu(elem,np1,Lu,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-      ! Calculate Stage3 = u_m + dt[phi1(dtL)(N(u_m;t_m)+L_mu_m)-1/c2phi2(dtL)(N(u_m;t_m)+L_mu_m)
-      !                             +1/c2phi2(dtL)(N(Stage2;tm+c2dt)+L_mu_m)]
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call add_Lu(elem,np1,Lu,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,dt/c2,np1,0.d0,n0,elem,nets,nete) ! dt/c2phi2(dtL)(N(Stage2;tm+c2dt)+Lu) is in np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call add_Lu(elem,nm1,Lu,nets,nete) 
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,-dt/c2,nm1,1.d0,np1,elem,nets,nete) !Last two terms stored in np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call add_Lu(elem,nm1,Lu,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,dt,nm1,1.d0,np1,elem,nets,nete) ! Last three terms stored in np1
-
-      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)  ! Stage 3 stored in np1
-
-
-      ! Calculate ump1 = u_m + dt[phi1(dtL)(N(um;tm)+L_mu_m)-phi2(dtL)(N(um;tm)+L_mu_m)+phi2(dtL)(N(Stage3;tm+dt)+L_mu_m)]
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call add_Lu(elem,np1,Lu,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete) ! Last term stored in np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call add_Lu(elem,nm1,Lu,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,dt,np1,dt,nm1,elem,nets,nete) ! Second and last terms stored in np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call add_Lu(elem,nm1,Lu,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,nm1,elem,nets,nete)  ! Last three terms stored in np1
-
-      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
-
-!!==========================================================================================================
-
-!!==========================================================================================================
-    elseif (tstep_type == 23) then ! Second order ETD Method with two stages
-      call t_startf('whole_timestep')
-      c2 = 3.d0/4.d0
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-      ! Stage1 = u_m is in n0
-      ! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      call t_startf('nonlinear_rhs')
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
-      call t_stopf('nonlinear_rhs')
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call t_startf('matrix_exp')
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call t_stopf('matrix_exp')
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     ! Calculate ump1 = exp(Ldt)u_m + dt[phi1(dtL)N(um;tm)-1/c2*phi2(dtL)N(um;tm)+1/c2*phi2(dtL)N(Stage2;tm+c2dt)]
-     ! Calculate ump1 =  dt[phi1(dtL)N(um;tm)-phi2(dtL)N(um;tm)] old
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt/c2,np1,elem,nets,nete) ! First and last terms stored in np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call t_startf('phi1')
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct,3,1,elem,nm1,nets,nete)
-      call t_stopf('phi1')
-!      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete) ! Second term added to np1
-
-      call compute_nonlinear_rhs(nm1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-!      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,nm1,elem,nets,nete)
-      call t_startf('phi2')
-      call apply_phi_func_new(phi_struct,3,2,elem,nm1,nets,nete)
-      call t_stopf('phi2')
-      call linear_combination_of_elem(np1,1.d0,np1,-dt/c2,nm1,elem,nets,nete)
-      call t_stopf('whole_timestep')
-
-!!==========================================================================================================
-    elseif (tstep_type == 24) then ! RKMK order 4
-      c2 = 1.d0/2.d0
-      c3 = 1.d0/2.d0
-      c4 = 1.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-      ! Stage1 = N(u_m) stored in np1
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0) ! Stores N(u_m) in np1
-      call store_state(elem,np1,nets,nete,stage1)
-
-      ! Calculate Stage2 = N(exp(Ldt/2)u_m + dt/2 phi1(Ldt/2)Stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt/2.d0,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt/2.d0,nets,nete) ! exp(Ldt/2)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,dt/2.d0,np1,elem,nets,nete)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2)
-
-      ! Calculate Stage3
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt/2.d0,1,np1,elem,nets,nete) !phi1(dt/2L)Stage2 is stored in np1
-      call linear_combination_of_elem(nm1,-dt/8.d0,np1,0.d0,nm1,elem,nets,nete)
-      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,nm1,nets,nete,Lu)
-      call linear_combination_of_elem(np1,1.d0/2.d0,np1,0.d0,nm1,elem,nets,nete)
-      call add_Lu(elem,np1,Lu,nets,nete) !1/2(1-dt/4L)phi1(dt/2L)Stage2 is stored in np1
-
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt/2.d0,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,dt/8.d0,nm1,0.d0,np1,elem,nets,nete)
-      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,nm1,nets,nete,Lu)
-      call add_Lu(elem,np1,Lu,nets,nete) !dt/8*L*phi1(dt/2 L)Stage1 is added to previous term
-
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt/2.d0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      call store_state(elem,nm1,nets,nete,stage3) ! stored in nm1
-
-      ! Calculate Stage4
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete) 
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,np1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete)
-      call compute_nonlinear_rhs(nm1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c4*dt) ! stored in nm1
-      
-      ! Compute u_mp1
-      call linear_combination_of_elem(np1,-dt/2.d0,nm1,0.d0,np1,elem,nets,nete)
-      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,np1,nets,nete,Lu)
-      call add_Lu(elem,nm1,Lu,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,dt/6.d0,nm1,0.d0,np1,elem,nets,nete) ! Stage 4 term added to sum
-
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt/3.d0,nm1,elem,nets,nete) ! Stage 3 term added to sum
-
-      call retrieve_state(stage2,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt/3.d0,nm1,elem,nets,nete) ! Stage 2 term added to sum
-      call store_state(elem,np1,nets,nete,sum_part1) ! Need to store sum to access more storage for next part
-
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,dt/2.d0,nm1,0.d0,np1,elem,nets,nete)
-      call getLu(JacL_elem,JacD_elem,JacU_elem,elem,np1,nets,nete,Lu)
-      call add_Lu(elem,nm1,Lu,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call retrieve_state(sum_part1,elem,np1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt/6.d0,nm1,elem,nets,nete) ! Stage 1 term added to sum
-
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,1.d0,np1,elem,nets,nete) ! Next step stored in np1
-
-
-!!==========================================================================================================
-    elseif (tstep_type == 25) then ! Third order ETD method with 4 stages
-      c2 = 1.d0/2.d0
-
-      b12 = -(1.d0+c2)/c2
-      b13 = 2.d0/c2
-      b22 = 1.d0/c2
-      b23 = -1.d0/(c2*c2)
-      b32 = 1.d0/(1.d0-c2)
-      b33 = (1.d0-3.d0*c2)/(c2*c2*(1.d0-c2))
-      b42 = -c2/(1.d0-c2)
-      b43 = 2.d0/(1.d0-c2)
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(Stage2)
-      ! compute N(stage2) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2) ! store (N(stage2)) in stage2
-      ! phi_1(Ldtc2)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt*c2,np1,elem,nets,nete) ! Stage 3 is in np1
-
-     !!! Calculate Stage4 = exp(Ldt)u_m + dt*phi1(dtL)N(Stage3)
-      ! compute N(stage3) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage3) ! N(stage3) is in stage 3
-      ! phi_1(Ldt)N(Stage3) (compute other phi functions for later)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage3,elem,np1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,1,elem,np1,nets,nete)
-      ! add to expLdtwphi
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete) ! exp(Ldt)u_m is in nm1
-
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! Stage 4 is in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-3phi2+4phi3)N(Stage1) +
-     ! (2phi2-4phi3)N(Stage2) + (2phi2-4phi3)N(Stage3) + (4phi3-phi2)N(Stage4))
-
-      ! stage 4 term
-      call compute_nonlinear_rhs(n0,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
-      ! +b43*dt*phi_3(Ldt)N(stage4)
-      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b43*dt,n0,elem,nets,nete)
-      ! +b42*phi_2(Ldt)N(stage4)
-      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,np1,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b42*dt,np1,elem,nets,nete)
-
-      ! stage 3 term
-      call retrieve_state(stage3,elem,n0,nets,nete)
-      ! +b32*dt*phi2(Ldt)N(stage3)
-      call apply_phi_func_new(phi_struct_Nstage3,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b32*dt,n0,elem,nets,nete)
-      ! +b33*dt*phi3(Ldt)N(stage3)
-      call retrieve_state(stage3,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b33*dt,n0,elem,nets,nete)
-
-      ! stage 2 term
-      ! get phi function for phi_k(Ldt)N(stage2), k = 1:3
-      call retrieve_state(stage2,elem,n0,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage2,elem,n0,nets,nete)
-      ! + b22*dt*phi_2(Ldt)N(stage2)
-      call apply_phi_func_new(phi_struct_Nstage2,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b22*dt,n0,elem,nets,nete)
-      ! +b23*dt*phi_3(Ldt)N(stage2)
-      call retrieve_state(stage2,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage2,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b23*dt,n0,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,1.d0*dt,n0,elem,nets,nete)
-      ! +b12*dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b12*dt,n0,elem,nets,nete)
-      ! +b13dt*phi_3(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,b13*dt,n0,elem,nets,nete)
-
-!!==========================================================================================================
-    elseif (tstep_type == 26) then ! 2nd order ETD method with 3 stages
-      c2 = 1.d0/2.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldt)u_m + dt*phi1(dtL)N(Stage2)
-      ! compute N(stage2) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2) ! store (N(stage2)) in stage2
-      ! phi_1(Ldt)N(stage2) and add to expLdtwphi
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage2,elem,np1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage2,3,1,elem,np1,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete) ! exp(Ldt)wphi is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! Stage 3 is in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * (phi1*N(Stage1) +
-     ! (1/(c2-1)phi2)N(Stage2) + (1/(1-c2))N(Stage3))
-
-      ! stage 3 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,1.d0/(1.d0-c2)*dt,np1,elem,nets,nete)
-
-      ! stage 2 term
-      ! get phi function for phi_k(Ldt)N(stage2), k = 1:3
-      call retrieve_state(stage2,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage2,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,1.d0/(c2-1.d0)*dt,n0,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,n0,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,n0,elem,nets,nete)
-!!==========================================================================================================
-    elseif (tstep_type == 27) then ! 3rd order ETD method with 4 stages; type 2
-      c2 = 1.d0/2.d0
-      c3 = 1.d0/2.d0
-
-      a31 = c3*(2.d0*c2-c3)/(2.d0*c2)
-      a32 = c3*c3/(2.d0*c2)
-      a41 = (2.d0*c3-1.d0)/(2.d0*c3)
-      a43 = 1.d0/(2.d0*c3)
-
-      b12 = (-c3-1.d0)/c3
-      b13 = 2.d0/c3
-      b32 = -1.d0/(c3*(c3-1.d0))
-      b33 = 2.d0/(c3*(c3-1.d0))
-      b42 = c3/(c3-1.d0)
-      b43 = -2.d0/(c3-1.d0)
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1) ! N(u_m) is stored in stage1
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + dt*(a31*phi1(c3dtL)N(u_m) + a32*phi1(c3dtL)N(Stage2))
-      ! compute N(stage2) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2) ! store (N(stage2)) in stage2
-      ! phi_1(Ldt)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete) ! exp(Ldtc3)wphi is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a31*dt,nm1,elem,nets,nete) ! Stage 3 is in np1 
-
-     !!! Calculate Stage4 = exp(Ldt)u_m + dt(a41*phi1(dtL)N(u_m) + a43*phi1(dtL)N(Stage3))
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      call store_state(elem,np1,nets,nete,stage3) ! N(stage3) is stored in stage3
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage3,elem,np1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,1,elem,np1,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,a43*dt,np1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a41*dt,nm1,elem,nets,nete) !stage 4 in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt *( phi1*N(Stage1)+b12*phi2*N(Stage1)+b13*phi3*N(Stage1)
-     !    + b32*phi2*N(Stage3) + b33*phi3*N(Stage4)
-     !    + b42*phi2*N(Stage4) + b43*phi3*N(Stage4) )
-
-      ! stage 4 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,np1,0.d0,nm1,elem,nets,nete) ! copy N(stage4) to nm1
-      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,np1,nets,nete)
-      call linear_combination_of_elem(np1,b42*dt,np1,b43*dt,nm1,elem,nets,nete)
-
-      ! stage 3 term
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b32*dt,nm1,elem,nets,nete)
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b33*dt,nm1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,nm1,nets,nete) ! stage 1 holds N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt*b12,nm1,elem,nets,nete) 
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt*b13,nm1,elem,nets,nete)
-      ! add expLdt*u which is in n0
-      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
- 
- !==========================================================================================================
-    elseif (tstep_type == 28) then ! 3rd order ETD method with 4 stages; type 3
-      c2 = 1.d0/4.d0
-      c3 = 3.d0/4.d0 !c2 =/= c3
-
-      a31 = c3*(2.d0*c2-c3)/(2.d0*c2)
-      a32 = c3*c3/(2.d0*c2)
-      a42 = (2.d0*c3-1.d0)/(2.d0*(c3-c2))
-      a43 = (1.d0-2.d0*c2)/(2.d0*(c3-c2))
-
-      b12 = (-c3-1.d0)/c3
-      b13 = 2.d0/c3
-      b32 = -1.d0/(c3*(c3-1.d0))
-      b33 = 2.d0/(c3*(c3-1.d0))
-      b42 = c3/(c3-1.d0)
-      b43 = -2.d0/(c3-1.d0)
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1) ! N(u_m) is stored in stage1
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + dt*(a31*phi1(c3dtL)N(u_m) + a32*phi1(c3dtL)N(Stage2))
-      ! compute N(stage2) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2) ! store (N(stage2)) in stage2
-      ! phi_1(Ldt)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete) ! exp(Ldtc3)wphi is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a31*dt,nm1,elem,nets,nete) ! Stage 3 is in np1 
-
-     !!! Calculate Stage4 = exp(Ldt)u_m + dt(a42*phi1(dtL)N(Stage2) + a43*phi1(dtL)N(Stage3))
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      call store_state(elem,np1,nets,nete,stage3) ! N(stage3) is stored in stage3
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage3,elem,np1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,1,elem,np1,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,a43*dt,np1,elem,nets,nete)
-      call retrieve_state(stage2,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a42*dt,nm1,elem,nets,nete) !stage 4 in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt *( phi1*N(Stage1)+b12*phi2*N(Stage1)+b13*phi3*N(Stage1)
-     !    + b32*phi2*N(Stage3) + b33*phi3*N(Stage4)
-     !    + b42*phi2*N(Stage4) + b43*phi3*N(Stage4) )
-
-      ! stage 4 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,np1,0.d0,nm1,elem,nets,nete) ! copy N(stage4) to nm1
-      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,np1,nets,nete)
-      call linear_combination_of_elem(np1,b42*dt,np1,b43*dt,nm1,elem,nets,nete)
-
-      ! stage 3 term
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b32*dt,nm1,elem,nets,nete)
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b33*dt,nm1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,nm1,nets,nete) ! stage 1 holds N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt*b12,nm1,elem,nets,nete) 
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt*b13,nm1,elem,nets,nete)
-      ! add expLdt*u which is in n0
-      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
- 
-!!==========================================================================================================
-    elseif (tstep_type == 29) then ! 3rd order ETD method with 4 stages; type 1 general
-      c2 = 1.d0/4.d0
-      c3 = 3.d0/4.d0 !c2^2-c2*c3-c2+c3^2 != 0.
-
-      b12 = (c2+c2*c2-c3*c3-c2**3)/(c2*(c2*c2-c2*c3-c2+c3*c3))
-      b13 = (-4*c2*c3+3*c3*c3-c3+c2-c2*c2-c2*c3*c3+3*c2*c2*c3)/(c2*c3*(c2*c2-c2*c3-c2+c3*c3))
-      b22 = (c3*c3-c2)/(c2*(c2*c2-c2*c3-c2+c3*c3))
-      b23 = (2*c2-3*c3+1)/(c2*(c2*c2-c2*c3-c2+c3*c3))
-      b32 = -c2/(c2*c2-c2*c3-c2+c3*c3)
-      b33 = (2*c3-1+c2)/(c3*(c2*c2-c2*c3-c2+c3*c3))
-      b42 = c2*c2/(c2*c2-c2*c3-c2+c3*c3)
-      b43 = (c3-3*c2)/(c2*c2-c2*c3-c2+c3*c3)
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + c3dt*phi1(c3dtL)N(Stage2)
-      ! compute N(stage2) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2) ! store (N(stage2)) in stage2
-      ! phi_1(Ldtc3)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt*c3,np1,elem,nets,nete) ! Stage 3 is in np1
-
-     !!! Calculate Stage4 = exp(Ldt)u_m + dt*phi1(dtL)N(Stage3)
-      ! compute N(stage3) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      call store_state(elem,np1,nets,nete,stage3) ! N(stage3) is in stage 3
-      ! phi_1(Ldt)N(Stage3) (compute other phi functions for later)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage3,elem,np1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,1,elem,np1,nets,nete)
-      ! add to expLdtwphi
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete) ! exp(Ldt)u_m is in nm1
-
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! Stage 4 is in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1+b12*phi2+b13*phi3)N(Stage1) +
-     ! (b22*phi2+b23*phi3)N(Stage2) + (b32*phi2+b33*phi3)N(Stage3) + (b42*phi2+b43*phi3)N(Stage4))
-
-      ! stage 4 term
-      call compute_nonlinear_rhs(n0,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call linear_combination_of_elem(np1,1.d0,n0,0.d0,np1,elem,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
-      ! +b43*dt*phi_3(Ldt)N(stage4)
-      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b43*dt,n0,elem,nets,nete)
-      ! +b42*phi_2(Ldt)N(stage4)
-      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,np1,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b42*dt,np1,elem,nets,nete)
-
-      ! stage 3 term
-      call retrieve_state(stage3,elem,n0,nets,nete)
-      ! +b32*dt*phi2(Ldt)N(stage3)
-      call apply_phi_func_new(phi_struct_Nstage3,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b32*dt,n0,elem,nets,nete)
-      ! +b33*dt*phi3(Ldt)N(stage3)
-      call retrieve_state(stage3,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b33*dt,n0,elem,nets,nete)
-
-      ! stage 2 term
-      ! get phi function for phi_k(Ldt)N(stage2), k = 1:3
-      call retrieve_state(stage2,elem,n0,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage2,elem,n0,nets,nete)
-      ! + b22*dt*phi_2(Ldt)N(stage2)
-      call apply_phi_func_new(phi_struct_Nstage2,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b22*dt,n0,elem,nets,nete)
-      ! +b23*dt*phi_3(Ldt)N(stage2)
-      call retrieve_state(stage2,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage2,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b23*dt,n0,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,1.d0*dt,n0,elem,nets,nete)
-      ! +b12*dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,nm1,b12*dt,n0,elem,nets,nete)
-      ! +b13dt*phi_3(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,b13*dt,n0,elem,nets,nete)
-
- !==========================================================================================================
-    elseif (tstep_type == 30) then ! 2nd order ETD method with 4 stages; type 1
-      c2 = 1.d0/4.d0
-      c3 = 3.d0/4.d0 !c2 <= c3
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + c3dt*phi1(c3dtL)N(Stage2)
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      ! phi_1(Ldtc3)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt*c3,np1,elem,nets,nete) ! Stage 3 is in np1
-
-     !!! Calculate Stage4 = exp(Ldt)u_m + dt*phi1(dtL)N(Stage3)
-      ! compute N(stage3)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      ! phi_1(Ldt)N(Stage3)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      ! add to expLdtwphi
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete) ! exp(Ldt)u_m is in nm1
-
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! Stage 4 is in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage4))
-
-      ! stage 4 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      ! -dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-
- !==========================================================================================================
-    elseif (tstep_type == 31) then ! 2nd order ETD method with 5 stages; type 1
-      c2 = 1.d0/4.d0
-      c3 = 1.d0/2.d0 !c2 <= c3 <= c4
-      c4 = 3.d0/4.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + c3dt*phi1(c3dtL)N(Stage2)
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      ! phi_1(Ldtc3)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt*c3,np1,elem,nets,nete) ! Stage 3 is in np1
-
-     !!! Calculate Stage4 = exp(Ldtc4)u_m + c4dt*phi1(c4dtL)N(Stage3)
-      ! compute N(stage3)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      ! phi_1(Ldtc4)N(stage3) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c4*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt*c4,np1,elem,nets,nete) ! Stage 4 is in np1
-
-     !!! Calculate Stage5 = exp(Ldt)u_m + dt*phi1(dtL)N(Stage4)
-      ! compute N(stage4)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c4*dt)
-      ! phi_1(Ldt)N(Stage4)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      ! add to expLdtwphi
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete) ! exp(Ldt)u_m is in nm1
-
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! Stage 5 is in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage5))
-
-      ! stage 5 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      ! -dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-
-
- !==========================================================================================================
-    elseif (tstep_type == 32) then ! 2nd order ETD method with 3 stages; type 1
-      c2 = 1.d0/2.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldt)u_m + dt*phi1(dtL)N(Stage2)
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      ! phi_1(Ldt)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! Stage 3 is in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage3))
-
-      ! stage 3 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      ! -dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-
-!==========================================================================================================
-    elseif (tstep_type == 33) then ! 3rd order ETD method with 5 stages; type 1
-      c2 = 1.d0/4.d0
-      c3 = 1.d0/2.d0
-      c4 = 2.d0/3.d0
-
-      b52 = ((c4+c3)*(c4-c3))/(c3-c2-c3*c3+c4*c3 -c4*c4+c4*c2);
-      b53 = (3*c3-2*c2-c4)/(c3-c2-c3*c3+c4*c3-c4*c4+c4*c2);
-      b42 = -c3/(c4*(c4-c3)) - (1-c3)/(c4*(c4-c3))*b52;
-      b43 = 2/(c4*(c4-c3)) - (1-c3)/(c4*(c4-c3))*b53;
-      b32 = 1/c3 - c4/c3*b42 - 1/c3*b52;
-      b33 = -c4/c3*b43 - 1/c3*b53;
-      b12 = -b52 - b42 - b32;
-      b13 = -b53 - b43 - b33;
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldtc2)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + c3dt*phi1(c3dtL)N(Stage2)
-      ! Compute N(Stage2) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      ! phi_1(Ldtc3)N(stage2)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc3)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete) ! exp(Ldtc3)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c3*dt,np1,elem,nets,nete) !stage3 is in np1
-
-     !!! Calculate Stage4 = exp(Ldtc4)u_m + c4dt*phi1(c4dtL)N(Stage3)
-      ! Compute N(Stage3) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      call store_state(elem,np1,nets,nete,stage3) ! N(Stage3) is stored in stage3
-      ! phi_1(Ldtc4)N(stage3)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc4)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c4*dt,nets,nete) ! exp(Ldtc4)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c4*dt,np1,elem,nets,nete) !stage4 is in np1
-
-     !!! Calculate Stage5 = exp(Ldt)u_m + dt*phi1(dtL)N(Stage4)
-      ! compute N(stage4)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c4*dt)
-      call store_state(elem,np1,nets,nete,stage4)
-      ! phi_1(Ldt)N(stage4) and add to expLdtwphi
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,1,elem,np1,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete) ! Stage 5 is in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt *((phi_1 + b12phi_2+b13phi_3)Nstage1 +
-     !                  + (b32phi_2+b33phi_3)Nstage3
-     !                  + (b42phi_2+b43phi_3)Nstage4 + (b52phi_2 + b53phi_3)Nstage5)
-
-      ! stage 5 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage5,elem,np1,nets,nete)
-      call linear_combination_of_elem(n0,1.d0,np1,0.d0,n0,elem,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage5,3,2,elem,np1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,b52*dt,np1,elem,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage5,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b53*dt,n0,elem,nets,nete)
-
-      ! stage 4 term
-      call retrieve_state(stage4,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b42*dt,nm1,elem,nets,nete)
-      call retrieve_state(stage4,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b43*dt,nm1,elem,nets,nete)
-
-      ! stage3 term
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b32*dt,nm1,elem,nets,nete)
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage3,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b33*dt,nm1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b12*dt,n0,elem,nets,nete)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,3,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b13*dt,n0,elem,nets,nete)
-
- 
- !==========================================================================================================
-    elseif (tstep_type == 34) then ! 2nd order ETD method with 3 stages; types 2 and 3
-      c2 = 1.d0/2.d0
-      a32 = 1.d0/2.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldt)u_m + dt*((1-a32)phi1(dtL)N(Stage1) + a32phi1(dtL)N(Stage2))
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      ! a32dt*phi_1(Ldt)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      ! (1-a32)dt*phi_1(Ldt)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(1.d0-a32)*dt,n0,elem,nets,nete)
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage3))
-
-      ! stage 3 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      ! -dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-
- !==========================================================================================================
-    elseif (tstep_type == 35) then ! 2nd order ETD method with 4 stages; type 2 
-      c2 = 1.d0/3.d0
-      c3 = 2.d0/3.d0
-      a32 = 1.d0/2.d0
-      a43 = 1.d0/2.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + dt*((c3-a32)phi1(c3dtL)N(Stage1) + a32phi1(c3dtL)N(Stage2))
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      ! a32dt*phi_1(Ldtc3)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      ! (c3-a32)dt*phi_1(Ldtc3)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(c3-a32)*dt,nm1,elem,nets,nete)
-
-     !!! Calculate Stage4 = exp(Ldt)u_m + dt*((1-a43)phi1(dtL)N(Stage1) + a43phi1(dtL)N(Stage3))
-      ! compute N(stage3)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      ! a43dt*phi_1(Ldt)N(stage3) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a43*dt,np1,elem,nets,nete)
-      ! (1-a43)dt*phi_1(Ldt)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(1.d0-a43)*dt,n0,elem,nets,nete)
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage4))
-
-      ! stage 4 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      ! -dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-
- !==========================================================================================================
-    elseif (tstep_type == 36) then ! 2nd order ETD method with 4 stages; type 3
-      c2 = 1.d0/3.d0
-      c3 = 2.d0/3.d0
-      a32 = 1.d0/2.d0
-      a43 = 1.d0/2.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + dt*((c3-a32)phi1(c3dtL)N(Stage1) + a32phi1(c3dtL)N(Stage2))
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2)
-      ! a32dt*phi_1(Ldtc3)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      ! (c3-a32)dt*phi_1(Ldtc3)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(c3-a32)*dt,nm1,elem,nets,nete)
-
-     !!! Calculate Stage4 = exp(Ldt)u_m + dt*((1-a43)phi1(dtL)N(Stage2) + a43phi1(dtL)N(Stage3))
-      ! compute N(stage3)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      ! a43dt*phi_1(Ldt)N(stage3) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a43*dt,np1,elem,nets,nete)
-      ! (1-a43)dt*phi_1(Ldt)N(stage2) and add to other terms
-      call retrieve_state(stage2,elem,n0,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,n0,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(1.d0-a43)*dt,n0,elem,nets,nete)
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage4))
-
-      ! stage 4 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      ! -dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-
-
- !==========================================================================================================
-    elseif (tstep_type == 37) then ! 2nd order ETD method with 5 stages; type 3
-      c2 = 1.d0/3.d0
-      c3 = 2.d0/3.d0
-      c4 = 3.d0/4.d0
-      a32 = 1.d0/2.d0
-      a43 = 1.d0/2.d0
-      a54 = 1.d0/2.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + dt*((c3-a32)phi1(c3dtL)N(Stage1) + a32phi1(c3dtL)N(Stage2))
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2)
-      ! a32dt*phi_1(Ldtc3)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      ! (c3-a32)dt*phi_1(Ldtc3)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(c3-a32)*dt,nm1,elem,nets,nete)
-
-     !!! Calculate Stage4 = exp(Ldtc4)u_m + dt*((c4-a43)phi1(c4dtL)N(Stage2) + a43phi1(c4dtL)N(Stage3))
-      ! compute N(stage3)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      call store_state(elem,np1,nets,nete,stage3)
-      ! a43dt*phi_1(Ldtc4)N(stage3) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c4*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a43*dt,np1,elem,nets,nete)
-      ! (c4-a43)dt*phi_1(Ldtc4)N(stage2) and add to other terms
-      call retrieve_state(stage2,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(c4-a43)*dt,nm1,elem,nets,nete)
-
-     !!! Calculate Stage5 = exp(Ldt)u_m + dt*((1-a54)phi1(dtL)N(Stage3) + a54phi1(dtL)N(Stage4))
-      ! compute N(stage4)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c4*dt)
-      ! a54dt*phi_1(Ldt)N(stage4) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a54*dt,np1,elem,nets,nete)
-      ! (1-a54)dt*phi_1(Ldt)N(stage3) and add to other terms
-      call retrieve_state(stage3,elem,n0,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,n0,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(1.d0-a54)*dt,n0,elem,nets,nete)
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage5))
-
-      ! stage 5 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      ! -dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-
- !==========================================================================================================
-    elseif (tstep_type == 38) then ! 2nd order ETD method with 5 stages; type 2
-      c2 = 1.d0/3.d0
-      c3 = 2.d0/3.d0
-      c4 = 3.d0/4.d0
-      a32 = 1.d0/2.d0
-      a43 = 1.d0/2.d0
-      a54 = 1.d0/2.d0
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1)
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + dt*((c3-a32)phi1(c3dtL)N(Stage1) + a32phi1(c3dtL)N(Stage2))
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      ! a32dt*phi_1(Ldtc3)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      ! (c3-a32)dt*phi_1(Ldtc3)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(c3-a32)*dt,nm1,elem,nets,nete)
-
-     !!! Calculate Stage4 = exp(Ldtc4)u_m + dt*((c4-a43)phi1(c4dtL)N(Stage1) + a43phi1(c4dtL)N(Stage3))
-      ! compute N(stage3)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      ! a43dt*phi_1(Ldtc4)N(stage3) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c4*dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a43*dt,np1,elem,nets,nete)
-      ! (c4-a43)dt*phi_1(Ldtc4)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(c4-a43)*dt,nm1,elem,nets,nete)
-
-     !!! Calculate Stage5 = exp(Ldt)u_m + dt*((1-a54)phi1(dtL)N(Stage1) + a54phi1(dtL)N(Stage4))
-      ! compute N(stage4)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c4*dt)
-      ! a54dt*phi_1(Ldt)N(stage4) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,a54*dt,np1,elem,nets,nete)
-      ! (1-a54)dt*phi_1(Ldt)N(stage1) and add to other terms
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,(1.d0-a54)*dt,n0,elem,nets,nete)
-
-     ! Calculate ump1= exp(Ldt)u_m + dt * ((phi1-phi2)N(Stage1) + phi2N(Stage5))
-
-      ! stage 5 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,np1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,nm1,dt,np1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,n0,nets,nete) ! stage 1 holds N(stage1)
-      ! + dt*phi_1(Ldt)N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,1.d0*dt,n0,elem,nets,nete)
-      ! -dt*phi_2(Ldt)N(stage1)
-      call retrieve_state(stage1,elem,n0,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,n0,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,-dt,n0,elem,nets,nete)
-
-!!==========================================================================================================
-    elseif (tstep_type == 39) then ! 3rd order ETD method with 5 stages; type 2
-      ! free parameters
-      c2 = 1.d0/2.d0
-      c3 = 1.d0/2.d0
-      c4 = 1.d0/2.d0
-      a32 = 1.d0/2.d0
-
-      ! dependent variables
-      a31 = c3-a32
-      a43 = c4*c4/(2.d0*c3)
-      a41 = c4-a43
-      a54 = 1.d0/(2.d0*c4) 
-      a51 = 1.d0-a54
-
-      b12 = (-c4-1.d0)/c4
-      b13 = 2.d0/c4
-      b42 = -1.d0/(c4*(c4-1.d0))
-      b43 = 2.d0/(c4*(c4-1.d0))
-      b52 = c4/(c4-1.d0)
-      b53 = -2.d0/(c4-1.d0)
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1) ! N(u_m) is stored in stage1
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + dt*(a31*phi1(c3dtL)N(u_m) + a32*phi1(c3dtL)N(Stage2))
-      ! compute N(stage2)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      ! phi_1(Ldtc3)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete) ! exp(Ldtc3)wphi is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a31*dt,nm1,elem,nets,nete) ! Stage 3 is in np1 
-
-     !!! Calculate Stage4 = exp(Ldtc4)u_m + dt*(a41*phi1(c4dtL)N(u_m) + a43*phi1(c4dtL)N(Stage3))
-      ! compute N(stage3)
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      ! phi_1(Ldtc4)N(stage3) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c4*dt,nets,nete) ! exp(Ldtc4)wphi is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,a43*dt,np1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a41*dt,nm1,elem,nets,nete) ! Stage 4 is in np1 
-
-     !!! Calculate Stage5 = exp(Ldt)u_m + dt(a51*phi1(dtL)N(u_m) + a54*phi1(dtL)N(Stage4))
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c4*dt)
-      call store_state(elem,np1,nets,nete,stage4) ! N(stage4) is stored in stage4
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,1,elem,np1,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,a54*dt,np1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a51*dt,nm1,elem,nets,nete) !stage 5 in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt *( phi1*N(Stage1)+b12*phi2*N(Stage1)+b13*phi3*N(Stage1)
-     !    + b42*phi2*N(Stage4) + b43*phi3*N(Stage4)
-     !    + b52*phi2*N(Stage5) + b53*phi3*N(Stage5) )
-
-      ! stage 5 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage5,elem,np1,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,np1,0.d0,nm1,elem,nets,nete) ! copy N(stage5) to nm1
-      call apply_phi_func_new(phi_struct_Nstage5,3,3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage5,3,2,elem,np1,nets,nete)
-      call linear_combination_of_elem(np1,b52*dt,np1,b53*dt,nm1,elem,nets,nete)
-
-      ! stage 4 term
-      call retrieve_state(stage4,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b42*dt,nm1,elem,nets,nete)
-      call retrieve_state(stage4,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b43*dt,nm1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,nm1,nets,nete) ! stage 1 holds N(stage1)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt*b12,nm1,elem,nets,nete) 
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt*b13,nm1,elem,nets,nete)
-      ! add expLdt*u which is in n0
-      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
-
-!==========================================================================================================
-
-    elseif (tstep_type == 40) then ! 3rd order ETD method with 5 stages; type 3
-    ! free parameters
-      c2 = 1.d0/4.d0
-      c3 = 1.d0/2.d0 
-      c4 = 3.d0/4.d0 !c4 =/= c3
-      a32 = 1.d0/2.d0
-
-      ! dependent variables
-      a31 = c3-a32
-      a43 = c4*(c4-2.d0*c2)/(2.d0*(c3-c2))
-      a42 = c4-a43
-      a54 = (1.d0-2.d0*c3)/(2.d0*(c4-c3)) 
-      a53 = 1.d0-a54
-
-      b12 = (-c4-1.d0)/c4
-      b13 = 2.d0/c4
-      b42 = -1.d0/(c4*(c4-1.d0))
-      b43 = 2.d0/(c4*(c4-1.d0))
-      b52 = c4/(c4-1.d0)
-      b53 = -2.d0/(c4-1.d0)
-
-      ! Compute JacL, JacD, and JacU
-      do ie = nets,nete
-        dp3d       => elem(ie)%state%dp3d(:,:,:,n0)
-        vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
-        phi_np1    => elem(ie)%state%phinh_i(:,:,:,n0)
-        call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-        call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_np1,pnh,1)
-        JacL_elem(:,:,:,ie) = JacL(:,:,:)
-        JacU_elem(:,:,:,ie) = JacU(:,:,:)
-        JacD_elem(:,:,:,ie) = JacD(:,:,:)
-      end do
-
-     !!! Stage1 = u_m is in n0
-
-     !!! Calculate Stage2 = exp(Ldtc2)u_m + c2dt*phi1(c2dtL)N(u_m;t_m)
-      ! Compute N(u_m) and store for later
-      call compute_nonlinear_rhs(np1,n0,n0,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,0.d0)
-      call store_state(elem,np1,nets,nete,stage1) ! N(u_m) is stored in stage1
-      ! phi_1(Ldtc2)N(stage1)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c2*dt,1,np1,elem,nets,nete)
-      ! add to exp(Ldtc2)u_m
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c2*dt,nets,nete) ! exp(Ldt)u_m is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,c2*dt,np1,elem,nets,nete) !Stage 2 is in np1
-
-     !!! Calculate Stage3 = exp(Ldtc3)u_m + dt*(a31*phi1(c3dtL)N(u_m) + a32*phi1(c3dtL)N(Stage2))
-      ! compute N(stage2) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c2*dt)
-      call store_state(elem,np1,nets,nete,stage2) ! store (N(stage2)) in stage2
-      ! phi_1(Ldt)N(stage2) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c3*dt,nets,nete) ! exp(Ldtc3)wphi is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,a32*dt,np1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c3*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a31*dt,nm1,elem,nets,nete) ! Stage 3 is in np1 
-
-     !!! Calculate Stage4 = exp(Ldtc4)u_m + dt*(a42*phi1(c4dtL)N(stage2) + a43*phi1(c4dtL)N(Stage3))
-      ! compute N(stage3) and store for later
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c3*dt)
-      call store_state(elem,np1,nets,nete,stage3) ! store (N(stage3)) in stage3
-      ! phi_1(Ldtc4)N(stage3) and add to expLdtwphi
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,np1,elem,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,n0,0.d0,nm1,elem,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,nm1,c4*dt,nets,nete) ! exp(Ldtc4)wphi is in nm1
-      call linear_combination_of_elem(np1,1.d0,nm1,a43*dt,np1,elem,nets,nete)
-      call retrieve_state(stage2,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,c4*dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a42*dt,nm1,elem,nets,nete) ! Stage 3 is in np1 
-
-     !!! Calculate Stage5 = exp(Ldt)u_m + dt(a53*phi1(dtL)N(Stage3) + a54*phi1(dtL)N(Stage4))
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,c4*dt)
-      call store_state(elem,np1,nets,nete,stage4) ! N(stage4) is stored in stage4
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage4,elem,np1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,1,elem,np1,nets,nete)
-      call expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,n0,a54*dt,np1,elem,nets,nete)
-      call retrieve_state(stage3,elem,nm1,nets,nete)
-      call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,nm1,elem,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,a53*dt,nm1,elem,nets,nete) !stage 5 in np1
-
-     ! Calculate ump1= exp(Ldt)u_m + dt *( phi1*N(Stage1)+b12*phi2*N(Stage1)+b13*phi3*N(Stage1)
-     !    + b42*phi2*N(Stage4) + b43*phi3*N(Stage4)
-     !    + b52*phi2*N(Stage5) + b53*phi3*N(Stage5) )
-
-      ! stage 5 term
-      call compute_nonlinear_rhs(np1,np1,np1,qn0,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,JacL_elem,JacD_elem,JacU_elem,dt)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage5,elem,np1,nets,nete)
-      call linear_combination_of_elem(nm1,1.d0,np1,0.d0,nm1,elem,nets,nete) ! copy N(stage5) to nm1
-      call apply_phi_func_new(phi_struct_Nstage5,3,3,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage5,3,2,elem,np1,nets,nete)
-      call linear_combination_of_elem(np1,b52*dt,np1,b53*dt,nm1,elem,nets,nete)
-
-      ! stage 4 term
-      call retrieve_state(stage4,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b42*dt,nm1,elem,nets,nete)
-      call retrieve_state(stage4,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage4,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,b43*dt,nm1,elem,nets,nete)
-
-      ! stage 1 term
-      ! get phi function for phi_k(Ldt)N(stage1), k=1:3
-      call retrieve_state(stage1,elem,nm1,nets,nete) ! stage 1 holds N(stage1)
-      call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,3,phi_struct_Nstage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,1,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt,nm1,elem,nets,nete)
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,2,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt*b12,nm1,elem,nets,nete) 
-      call retrieve_state(stage1,elem,nm1,nets,nete)
-      call apply_phi_func_new(phi_struct_Nstage1,3,3,elem,nm1,nets,nete)
-      call linear_combination_of_elem(np1,1.d0,np1,dt*b13,nm1,elem,nets,nete)
-      ! add expLdt*u which is in n0
-      call linear_combination_of_elem(np1,1.d0,n0,1.d0,np1,elem,nets,nete)
- 
-
-!==========================================================================================================
-
-    else
-      call abortmp('ERROR: bad choice of tstep_type')
-    endif
-
-
-    ! ==============================================
-    ! Time-split Horizontal diffusion: nu.del^2 or nu.del^4
-    ! U(*) = U(t+1)  + dt2 * HYPER_DIFF_TERM(t+1)
-    ! ==============================================
-    ! note:time step computes u(t+1)= u(t*) + RHS.
-    ! for consistency, dt_vis = t-1 - t*, so this is timestep method dependent
-    ! forward-in-time, hypervis applied to dp3d
-    if (hypervis_order == 2 .and. nu>0) &
-         call advance_hypervis(elem,hvcoord,hybrid,deriv,np1,nets,nete,dt_vis,eta_ave_w)
-
-
-
-
-    ! warning: advance_physical_vis currently requires levels that are equally spaced in z
-    if (dcmip16_mu>0) call advance_physical_vis(elem,hvcoord,hybrid,deriv,np1,nets,nete,dt,dcmip16_mu_s,dcmip16_mu)
-
-    call t_stopf('prim_advance_exp')
-  end subroutine prim_advance_exp
-
-
-#else
-
-  !_____________________________________________________________________
-  subroutine prim_advance_exp(elem, deriv, hvcoord, hybrid,dt, tl,  nets, nete, compute_diagnostics)
-  !
-  ! version of prim_advance_exp which uses ARKODE for timestepping
-  !
-    use arkode_mod,     only: parameter_list, update_arkode, get_solution_ptr, &
-                              table_list, set_Butcher_tables, &
-                              calc_nonlinear_stats, update_nonlinear_stats, &
-                              rel_tol, abs_tol, use_column_solver
-    use iso_c_binding
-
-    type (element_t),      intent(inout), target :: elem(:)
-    type (derivative_t),   intent(in)            :: deriv
-    type (hvcoord_t)                             :: hvcoord
-    type (hybrid_t),       intent(in)            :: hybrid
-    real (kind=real_kind), intent(in)            :: dt
-    type (TimeLevel_t)   , intent(in)            :: tl
-    integer              , intent(in)            :: nets
-    integer              , intent(in)            :: nete
-    logical,               intent(in)            :: compute_diagnostics
-
-    real (kind=real_kind) :: dt2, time, dt_vis, x, eta_ave_w
-    real (kind=real_kind) :: itertol,a1,a2,a3,a4,a5,a6,ahat1,ahat2
-    real (kind=real_kind) :: ahat3,ahat4,ahat5,ahat6,dhat1,dhat2,dhat3,dhat4
-    real (kind=real_kind) ::  gamma,delta
-
-    integer :: ie,nm1,n0,np1,nstep,qsplit_stage,k, qn0
-    integer :: n,i,j,maxiter,sumiter
- 
-    type(parameter_list) :: arkode_parameters
-    type(table_list) :: arkode_tables
-    type(c_ptr) :: ynp1
-    real(real_kind) :: tout, t
-    integer(C_INT) :: ierr, itask
-
-    call t_startf('prim_advance_exp')
-    nm1   = tl%nm1
-    n0    = tl%n0
-    np1   = tl%np1
-    nstep = tl%nstep
-
-    ! get timelevel for accessing tracer mass Qdp() to compute virtual temperature
-    call TimeLevel_Qdp(tl, qsplit, qn0)  ! compute current Qdp() timelevel
-
-! integration = "explicit"
-!
-!   tstep_type=1  RK2 followed by qsplit-1 leapfrog steps        CFL=close to qsplit
-!                    typically requires qsplit=4 or 5
-!
-!   tstep_type=5  Kinnmark&Gray RK3 5 stage 3rd order            CFL=3.87  (sqrt(15))
-!                 From Paul Ullrich.  3rd order for nonlinear terms also
-!                 K&G method is only 3rd order for linear
-!                 optimal: for windspeeds ~120m/s,gravity: 340m/2
-!                 run with qsplit=1
-!                 (K&G 2nd order method has CFL=4. tiny CFL improvement not worth 2nd order)
-!   tstep_type=6  IMEX-KG243 
-!   tstep_type=7  IMEX-KG254
-!   
-
-! default weights for computing mean dynamics fluxes
-    eta_ave_w = 1d0/qsplit
-
-!   this should not be needed, but in case physics update u without updating w b.c.:
-    do ie=nets,nete
-       elem(ie)%state%w_i(:,:,nlevp,n0) = (elem(ie)%state%v(:,:,1,nlev,n0)*elem(ie)%derived%gradphis(:,:,1) + &
-            elem(ie)%state%v(:,:,2,nlev,n0)*elem(ie)%derived%gradphis(:,:,2))/g
-    enddo
- 
-#ifndef CAM
-    ! if "prescribed wind" set dynamics explicitly and skip time-integration
-    if (prescribed_wind ==1 ) then
-       call set_prescribed_wind(elem,deriv,hybrid,hvcoord,dt,tl,nets,nete,eta_ave_w)
-       call t_stopf('prim_advance_exp')
-       return
-    endif
-#endif
-
-    ! ==================================
-    ! Take timestep
-    ! ==================================
-    dt_vis = dt
-    if (tstep_type==1) then 
-       ! RK2                                                                                                              
-       ! forward euler to u(dt/2) = u(0) + (dt/2) RHS(0)  (store in u(np1))                                               
-       call compute_andor_apply_rhs(np1,n0,n0,qn0,dt/2,elem,hvcoord,hybrid,&                                              
-            deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)                                                      
-       ! leapfrog:  u(dt) = u(0) + dt RHS(dt/2)     (store in u(np1))                                                     
-       call compute_andor_apply_rhs(np1,n0,np1,qn0,dt,elem,hvcoord,hybrid,&                                               
-            deriv,nets,nete,.false.,eta_ave_w,1.d0,1.d0,1.d0)                                                             
-
-
-    else if (tstep_type==4) then ! explicit table from IMEX-KG254  method                                                              
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt/4,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt/6,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,3*dt/8,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt/2,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,0d0,1.d0,1.d0,1.d0)
       call compute_andor_apply_rhs(np1,n0,np1,qn0,dt,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,eta_ave_w*1d0,1.d0,1.d0,1.d0)
+            deriv,nets,nete,.false.,eta_ave_w*1d0,1.d0,0d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,a1*dt,np1,a2*dt,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,maxiter,itertol)
+      !  u0 saved in elem(n0)
+      !  u2 saved in elem(nm1)
+      !  u4 saved in elem(np1)
+      !  u5 = u0 + dt*N(u4) + dt*6/22*S(u0) + dt*6/22 S(u1) + dt*10/22* S(u5)
+!===================================================================================
+   elseif (tstep_type == 8 ) then ! KG3 + CN + offcentering
 
+      ! introduce 1st order offcentering
+      offcenter = 0.5d0
+      aphat = 0.5d0-offcenter
+      dhat3 = 0.5d0+offcenter
 
+      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt/2,elem,hvcoord,hybrid,&
+        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0) !   aphat/ap,1d0)               
 
-    else if (tstep_type==5) then
-       ! Ullrich 3nd order 5 stage:   CFL=sqrt( 4^2 -1) = 3.87
+      call compute_stage_value_dirk(nm1,0d0,n0,aphat*dt/2,np1,dhat3*dt/2,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,maxiter,itertol)
+
+      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt/2,elem,hvcoord,hybrid,&
+        deriv,nets,nete,.false.,0d0,1d0,0d0,1d0)
+
+      call compute_stage_value_dirk(nm1,0d0,n0,aphat*dt/2,np1,dhat3*dt/2,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,maxiter,itertol)
+
+      ! introduce 1st order offcentering
+      offcenter = 0.01d0
+      aphat = 0.5d0-offcenter
+      dhat3 = 0.5d0+offcenter
+
+      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt,elem,hvcoord,hybrid,&
+           deriv,nets,nete,.false.,eta_ave_w,1d0,0d0,1d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,aphat*dt,np1,dhat3*dt,qn0,elem,hvcoord,hybrid,&
+        deriv,nets,nete,maxiter,itertol)
+
+    else if (tstep_type==9) then 
+       ! KGU5-3 (3rd order) with IMEX backward euler (2nd order)
+       ! 
        ! u1 = u0 + dt/5 RHS(u0)  (save u1 in timelevel nm1)
        call compute_andor_apply_rhs(nm1,n0,n0,qn0,dt/5,elem,hvcoord,hybrid,&
-            deriv,nets,nete,compute_diagnostics,eta_ave_w/4,1.d0,1.d0,1.d0)
+            deriv,nets,nete,compute_diagnostics,eta_ave_w/4,1.d0,0.d0,1.d0)
+       call compute_stage_value_dirk(nm1,0d0,n0,0d0,nm1,dt/5,qn0,elem,hvcoord,hybrid,&
+            deriv,nets,nete,maxiter,itertol)
+
        ! u2 = u0 + dt/5 RHS(u1)
        call compute_andor_apply_rhs(np1,n0,nm1,qn0,dt/5,elem,hvcoord,hybrid,&
-            deriv,nets,nete,.false.,0d0,1.d0,1.d0,1.d0)
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+       call compute_stage_value_dirk(nm1,0d0,n0,0d0,np1,dt/5,qn0,elem,hvcoord,hybrid,&
+            deriv,nets,nete,maxiter,itertol)
+
        ! u3 = u0 + dt/3 RHS(u2)
        call compute_andor_apply_rhs(np1,n0,np1,qn0,dt/3,elem,hvcoord,hybrid,&
-            deriv,nets,nete,.false.,0d0,1.d0,1.d0,1.d0)
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+       call compute_stage_value_dirk(nm1,0d0,n0,0d0,np1,dt/3,qn0,elem,hvcoord,hybrid,&
+            deriv,nets,nete,maxiter,itertol)
+
        ! u4 = u0 + 2dt/3 RHS(u3)
        call compute_andor_apply_rhs(np1,n0,np1,qn0,2*dt/3,elem,hvcoord,hybrid,&
-            deriv,nets,nete,.false.,0d0,1.d0,1.d0,1.d0)
-       ! compute (5*u1/4 - u0/4) in timelevel nm1:
-       do ie=nets,nete
-          elem(ie)%state%v(:,:,:,:,nm1)= (5*elem(ie)%state%v(:,:,:,:,nm1) &
-               - elem(ie)%state%v(:,:,:,:,n0) ) /4
-          elem(ie)%state%vtheta_dp(:,:,:,nm1)= (5*elem(ie)%state%vtheta_dp(:,:,:,nm1) &
-               - elem(ie)%state%vtheta_dp(:,:,:,n0) )/4
-          elem(ie)%state%dp3d(:,:,:,nm1)= (5*elem(ie)%state%dp3d(:,:,:,nm1) &
-                  - elem(ie)%state%dp3d(:,:,:,n0) )/4
-          elem(ie)%state%w_i(:,:,1:nlevp,nm1)= (5*elem(ie)%state%w_i(:,:,1:nlevp,nm1) &
-                  - elem(ie)%state%w_i(:,:,1:nlevp,n0) )/4
-          elem(ie)%state%phinh_i(:,:,1:nlev,nm1)= (5*elem(ie)%state%phinh_i(:,:,1:nlev,nm1) &
-                  - elem(ie)%state%phinh_i(:,:,1:nlev,n0) )/4
-       enddo
-       ! u5 = (5*u1/4 - u0/4) + 3dt/4 RHS(u4)
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+       call compute_stage_value_dirk(nm1,0d0,n0,0d0,np1,2*dt/3,qn0,elem,hvcoord,hybrid,&
+            deriv,nets,nete,maxiter,itertol)
+
+
+       ! u5 = u1 + dt 3/4 RHS(u4)
        call compute_andor_apply_rhs(np1,nm1,np1,qn0,3*dt/4,elem,hvcoord,hybrid,&
-            deriv,nets,nete,.false.,3*eta_ave_w/4,1.d0,1.d0,1.d0)
-       ! final method is the same as:
-       ! u5 = u0 +  dt/4 RHS(u0)) + 3dt/4 RHS(u4)
-!=========================================================================================
-    elseif (tstep_type == 6) then  ! IMEX-KG243
+            deriv,nets,nete,.false.,3*eta_ave_w/4,1.d0,0.d0,1.d0)
+       ! u(np1) = [u1 + 3dt/4 RHS(u4)] +  1/4 (u1 - u0)    STABLE
+       do ie=nets,nete
+          elem(ie)%state%v(:,:,:,:,np1)=elem(ie)%state%v(:,:,:,:,np1)+&
+               (elem(ie)%state%v(:,:,:,:,nm1)-elem(ie)%state%v(:,:,:,:,n0))/4
+          elem(ie)%state%vtheta_dp(:,:,:,np1)=elem(ie)%state%vtheta_dp(:,:,:,np1)+&
+               (elem(ie)%state%vtheta_dp(:,:,:,nm1)-elem(ie)%state%vtheta_dp(:,:,:,n0))/4
+          elem(ie)%state%dp3d(:,:,:,np1)=elem(ie)%state%dp3d(:,:,:,np1)+&
+               (elem(ie)%state%dp3d(:,:,:,nm1)-elem(ie)%state%dp3d(:,:,:,n0))/4
+          elem(ie)%state%w_i(:,:,1:nlevp,np1)=elem(ie)%state%w_i(:,:,1:nlevp,np1)+&
+              (elem(ie)%state%w_i(:,:,1:nlevp,nm1)-elem(ie)%state%w_i(:,:,1:nlevp,n0))/4
+          elem(ie)%state%phinh_i(:,:,1:nlev,np1)=elem(ie)%state%phinh_i(:,:,1:nlev,np1)+&
+               (elem(ie)%state%phinh_i(:,:,1:nlev,nm1)-elem(ie)%state%phinh_i(:,:,1:nlev,n0))/4
+          call limiter_dp3d_k(elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
+               elem(ie)%spheremp,hvcoord%dp0)
+       enddo
 
-      a1 = 1./4.
-      a2 = 1./3.
-      a3 = 1./2.
-      a4 = 1.0
+       !  n0          nm1       np1 
+       ! u0*5/18  + u1*5/18  + u5*8/18
+       a1=5*dt/18
+       a2=dt/36    ! 5/18 - 1/4 (due to the 1/4*u1 added above)
+       a3=8*dt/18
+       call compute_stage_value_dirk(nm1,a2,n0,a1,np1,a3,qn0,elem,hvcoord,hybrid,&
+            deriv,nets,nete,maxiter,itertol)
 
-      ahat4 = 1.
-      ahat1 = 0.
-      max_itercnt_perstep = 0
-      max_itererr_perstep = 0.0  
-      ! IMEX-KGNO243
-      dhat2 = (1.+sqrt(3.)/3.)/2.
-      dhat3 = dhat2
-      ahat3 = 1./2.-dhat3
-      dhat1 = (ahat3-dhat2+dhat2*dhat3)/(1.-dhat2-dhat3)
-      ahat2 = (dhat1-dhat1*dhat3-dhat1*dhat2+dhat1*dhat2*dhat3)/(1.-dhat3)
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt*a1,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-  
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
+    else if (tstep_type==10) then ! KG5(2nd order CFL=4) + optimized
+      dt2=dt/4
+      call compute_andor_apply_rhs(nm1,n0,n0,qn0,dt2,elem,hvcoord,hybrid,&
+            deriv,nets,nete,compute_diagnostics,0d0,1.d0,0.d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,0d0,nm1,dt2,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      sumiter = maxiter 
 
- 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a2,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat2/a2,1d0)
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol) 
-      sumiter = sumiter + maxiter
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a3,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
+      dt2=dt/6
+      call compute_andor_apply_rhs(np1,n0,nm1,qn0,dt2,elem,hvcoord,hybrid,&
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,0d0,np1,dt2,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      sumiter = sumiter + maxiter
 
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a4,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,1d0,ahat4/a4,1d0)
-      if (calc_nonlinear_stats) then
-        call update_nonlinear_stats(1, sumiter)
-      end if
-
-
-!==============================================================================================
-!==============================================================================================
-    elseif (tstep_type == 7) then  ! imkg254, most robust of the methods
- 
-      max_itercnt_perstep = 0
-      max_itererr_perstep = 0.0
-
-      a1 = 1/4d0
-      a2 = 1/6d0
-      a3 = 3/8d0
-      a4 = 1/2d0
-      a5 = 1d0
-      ahat5 = 1d0
-
-      ! IMEX-KGO254 most stable coefficients
-      dhat2 = 1d0
-      dhat3 = 1d0
-      dhat4 = 2d0
-      ahat4 = 1d0/2d0-dhat4
-      dhat1= (ahat4*ahat5 - ahat5*dhat3 - ahat5*dhat2 + dhat3*dhat2+ dhat3*dhat4 + dhat2*dhat4)/&
-        (ahat5-dhat3-dhat2-dhat4)
-      ahat3 = (- ahat4*ahat5*dhat1 - ahat4*ahat5*dhat2+ ahat5*dhat1*dhat2 + ahat5*dhat1*dhat3 +&
-        ahat5*dhat2*dhat3- dhat1*dhat2*dhat3 - dhat1*dhat2*dhat4 - dhat1*dhat3*dhat4- &
-        dhat2*dhat3*dhat4)/(-ahat4*ahat5)
-      ahat2 = ( - ahat3*ahat4*ahat5*dhat1 + ahat4*ahat5*dhat1*dhat2 -&
-        ahat5*dhat1*dhat2*dhat3 + dhat1*dhat2*dhat3*dhat4)/(-ahat3*ahat4*ahat5)
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,a1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
+      dt2=3*dt/8
+      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt2,elem,hvcoord,hybrid,&
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,0d0,np1,dt2,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat2/a2,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
+
+      dt2=dt/2
+      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt2,elem,hvcoord,hybrid,&
+            deriv,nets,nete,.false.,0d0,1.d0,0.d0,1.d0)
+      call compute_stage_value_dirk(nm1,0d0,n0,0d0,np1,dt2,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
+      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt,elem,hvcoord,hybrid,&
+            deriv,nets,nete,.false.,eta_ave_w*1d0,1.d0,0d0,1.d0)
+
+
+      a1=.24362d0   
+      a2=.34184d0 
+      a3=1-(a1+a2)
+      call compute_stage_value_dirk(nm1,a2*dt,n0,a1*dt,np1,a3*dt,qn0,elem,hvcoord,hybrid,&
         deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat4/a4,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a5*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,1d0,ahat5/a5,1d0)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-!================================================================================
-    elseif (tstep_type == 8) then ! IMKG253, might be more efficient than IMKG254, might be a teeny bit bad at coarse resolution
-
-      max_itercnt_perstep = 0
-      max_itererr_perstep = 0.0
-
-      a1 = 1/4d0
-      a2 = 1/6d0
-      a3 = 3/8d0
-      a4 = 1/2d0
-      a5 = 1d0
-      ahat5 = 1d0
-
-      dhat4 = 1d0
-      dhat3 = 1d0
-      ahat4 = -1d0/2d0
-      dhat2= (ahat4*ahat5 - ahat5*dhat1 - ahat5*dhat3 + dhat1*dhat3+ dhat1*dhat4 + dhat3*dhat4)/(ahat5-dhat1-dhat3-dhat4)
-      ahat3 = (-ahat4*ahat5*dhat2+ahat5*dhat2*dhat3- dhat2*dhat3*dhat4)/(-ahat4*ahat5)
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,a1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
- 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat4/a4,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a5*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,1d0,ahat5/a5,1d0)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-!================================================================================
-    elseif (tstep_type == 9) then ! IMKG252, use if feeling lucky, might be bad at coarse resolution
- 
-      max_itercnt_perstep = 0
-      max_itererr_perstep = 0.0
-
-      a1 = 1/4d0
-      a2 = 1/6d0
-      a3 = 3/8d0
-      a4 = 1/2d0
-      a5 = 1d0
-      ahat5 = 1d0
-
-      dhat3 = (2d0+sqrt(2d0))/2d0
-      dhat4 = (2d0+sqrt(2d0))/2d0
-      ahat4 = -(1d0+sqrt(2d0))/2d0
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,a1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0) 
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat4/a4,1d0)
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,a5*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,eta_ave_w,1d0,ahat5/a5,1d0)
-
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-! ==================================================================================
-    elseif (tstep_type == 10) then ! IMKG232b
-      a1 = 1d0/2d0
-      a2 = 1d0/2d0
-      a3 = 1d0
-      ahat3 = 1d0
-      dhat2 = .5d0*(2d0+sqrt(2d0))
-      dhat1 = dhat2
-      ahat2 = -(1d0+sqrt(2d0))/2d0
-
-      call compute_andor_apply_rhs(np1,n0,n0,qn0,dt*a1,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,0d0,1d0)  
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
-
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a2,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat2/a2,1d0)
-
-      maxiter=10
-      itertol=1e-12
-      call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol) 
-      max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
-      max_itererr_perstep = max(itertol,max_itererr_perstep)
+      !  u0 saved in elem(n0)
+      !  u1 saved in elem(nm1)
+      !  u4 saved in elem(np1)
 
 
-      call compute_andor_apply_rhs(np1,n0,np1,qn0,dt*a3,elem,hvcoord,hybrid,&
-        deriv,nets,nete,compute_diagnostics,0d0,1d0,ahat3/a3,1d0)
 
-      avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
-
-!=========================================================================================
+#ifdef ARKODE
     else if (tstep_type==20) then ! ARKode RK2
-      call set_Butcher_tables(arkode_parameters, arkode_tables%RK2)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%RK2)
 
     else if (tstep_type==21) then ! ARKode Kinnmark, Gray, Ullrich 3rd-order, 5-stage
-      call set_Butcher_tables(arkode_parameters, arkode_tables%KGU35)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%KGU35)
 
     else if (tstep_type==22) then ! ARKode Ascher 2nd/2nd/2nd-order, 3-stage
-      call set_Butcher_tables(arkode_parameters, arkode_tables%ARS232)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%ARS232)
 
     else if (tstep_type==23) then ! ARKode Candidate ARK453 Method
-      call set_Butcher_tables(arkode_parameters, arkode_tables%ARK453)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%ARK453)
 
     else if (tstep_type==24) then ! ARKode Ascher 2nd/2nd/2nd-order, 3-stage
-      call set_Butcher_tables(arkode_parameters, arkode_tables%ARS222)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%ARS222)
 
     else if (tstep_type==25) then ! ARKode Ascher 3rd/4th/3rd-order, 3-stage
-      call set_Butcher_tables(arkode_parameters, arkode_tables%ARS233)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%ARS233)
 
     else if (tstep_type==26) then ! ARKode Ascher 3rd/3rd/3rd-order, 4-stage
-      call set_Butcher_tables(arkode_parameters, arkode_tables%ARS343)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%ARS343)
 
     else if (tstep_type==27) then ! ARKode Ascher 3rd/3rd/3rd-order, 5-stage
-      call set_Butcher_tables(arkode_parameters, arkode_tables%ARS443)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%ARS443)
 
     else if (tstep_type==28) then ! ARKode Kennedy 3rd/3rd/3rd-order, 4-stage
-      call set_Butcher_tables(arkode_parameters, arkode_tables%ARK324)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%ARK324)
 
     else if (tstep_type==29) then ! ARKode Kennedy 4th/4th/4th-order, 6-stage
-      call set_Butcher_tables(arkode_parameters, arkode_tables%ARK436)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%ARK436)
 
     else if (tstep_type==30) then ! ARKode Conde et al ssp3(3,3,3)a (renamed here)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%SSP3333B)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%SSP3333B)
 
     else if (tstep_type==31) then ! ARKode Conde et al ssp3(3,3,3)b (renamed here)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%SSP3333C)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%SSP3333C)
 
     else if (tstep_type==32) then ! ARKode IMKG 2nd-order, 4 stage (2 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG232)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG232)
 
     else if (tstep_type==33) then ! ARKode IMKG 2nd-order, 5 stage (2 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG242)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG242)
 
     else if (tstep_type==34) then ! ARKode IMKG 2nd-order, 5 stage (3 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG243)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG243)
 
     else if (tstep_type==35) then ! ARKode IMKG 2nd-order, 6 stage (2 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG252)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG252)
 
     else if (tstep_type==36) then ! ARKode IMKG 2nd-order, 6 stage (3 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG253)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG253)
 
     else if (tstep_type==37) then ! ARKode IMKG 2nd-order, 6 stage (4 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG254)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG254)
 
     else if (tstep_type==38) then ! ARKode IMKG 3rd-order, 5 stage (2 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG342)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG342)
 
     else if (tstep_type==39) then ! ARKode IMKG 3rd-order, 5 stage (3 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG343)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG343)
 
     else if (tstep_type==40) then ! ARKode IMKG 3rd-order, 6 stage (3 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG353)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG353)
 
     else if (tstep_type==41) then ! ARKode IMKG 3rd-order, 6 stage (4 implicit)
-      call set_Butcher_tables(arkode_parameters, arkode_tables%IMKG354)
+      call set_Butcher_tables(arkode_table_set, arkode_table_list%IMKG354)
 
     else 
        call abortmp('ERROR: bad choice of tstep_type')
@@ -3323,13 +451,7 @@ contains
     if (tstep_type >= 20) then
 
       ! If implicit solves are involved, set corresponding parameters
-      if (arkode_parameters%imex /= 1) then
-        ! linear solver parameters
-        if (.not.use_column_solver) then
-          arkode_parameters%precLR = 0 ! no preconditioning
-          arkode_parameters%gstype = 1 ! classical Gram-Schmidt orthogonalization
-          arkode_parameters%lintol = 0.05d0 ! multiplies NLCOV_COEF in linear conv. criteria
-        end if
+      if (arkode_table_set%imex /= 1) then
         ! Iteration tolerances (appear in WRMS array as rtol*|u_i| + atol_i)
         arkode_parameters%rtol = rel_tol
         if (abs_tol < 0.d0) then
@@ -3344,22 +466,23 @@ contains
         end if
       end if
 
-      ! update ARKode solver
-      call update_arkode(elem, nets, nete, deriv, hvcoord, hybrid, &
-                               dt, eta_ave_w, n0, qn0, arkode_parameters)
-
-      ! call ARKode to perform a single step
-      call get_solution_ptr(np1, ynp1)
-      tout = dt
-      itask = 2          ! use 'one-step' mode
-      call farkode(tout, t, ynp1, itask, ierr)
+      ! use ARKode solver to evolve solution
+      ierr = evolve_solution(elem, nets, nete, deriv, hvcoord, hybrid, &
+                             dt, eta_ave_w, n0, np1, qn0, arkode_parameters, &
+                             arkode_table_set)
       if (ierr /= 0) then
-        call abortmp('farkode failed')
+        call abortmp('ARKode evolve failed')
       endif
       if (calc_nonlinear_stats) then
         call update_nonlinear_stats()
       end if
     end if
+#else
+    else 
+       call abortmp('ERROR: bad choice of tstep_type')
+    endif
+#endif
+
 
     ! ==============================================
     ! Time-split Horizontal diffusion: nu.del^2 or nu.del^4
@@ -3368,18 +491,28 @@ contains
     ! note:time step computes u(t+1)= u(t*) + RHS.
     ! for consistency, dt_vis = t-1 - t*, so this is timestep method dependent
     ! forward-in-time, hypervis applied to dp3d
+    if (compute_diagnostics) then
+       call t_startf("prim_diag")
+       call prim_energy_halftimes(elem,hvcoord,tl,5,.false.,nets,nete)
+       call prim_diag_scalars(elem,hvcoord,tl,5,.false.,nets,nete)
+       call t_stopf("prim_diag")
+    endif
+
     if (hypervis_order == 2 .and. nu>0) &
          call advance_hypervis(elem,hvcoord,hybrid,deriv,np1,nets,nete,dt_vis,eta_ave_w)
-
-
 
 
     ! warning: advance_physical_vis currently requires levels that are equally spaced in z
     if (dcmip16_mu>0) call advance_physical_vis(elem,hvcoord,hybrid,deriv,np1,nets,nete,dt,dcmip16_mu_s,dcmip16_mu)
 
+    if (compute_diagnostics) then
+       call t_startf("prim_diag")
+       call prim_energy_halftimes(elem,hvcoord,tl,6,.false.,nets,nete)
+       call prim_diag_scalars(elem,hvcoord,tl,6,.false.,nets,nete)
+       call t_stopf("prim_diag")
+    endif
     call t_stopf('prim_advance_exp')
   end subroutine prim_advance_exp
-#endif
 
 !----------------------------- APPLYCAMFORCING-DYNAMICS ----------------------------
 
@@ -3397,7 +530,10 @@ contains
      elem(ie)%state%phinh_i(:,:,1:nlev,np1) = elem(ie)%state%phinh_i(:,:,1:nlev,np1) + dt*elem(ie)%derived%FPHI(:,:,1:nlev)
 
      elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) + dt*elem(ie)%derived%FM(:,:,1:2,:)
+
+#ifndef CAM
      elem(ie)%state%w_i(:,:,1:nlev,np1) = elem(ie)%state%w_i(:,:,1:nlev,np1) + dt*elem(ie)%derived%FM(:,:,3,:)
+#endif
 
      ! finally update w at the surface: 
      elem(ie)%state%w_i(:,:,nlevp,np1) = (elem(ie)%state%v(:,:,1,nlev,np1)*elem(ie)%derived%gradphis(:,:,1) + &
@@ -3430,7 +566,7 @@ contains
 
   ! local
   real (kind=real_kind) :: eta_ave_w  ! weighting for mean flux terms
-  integer :: k2,k,kptr,i,j,ie,ic,nt,nlyr_tot,ssize
+  integer :: k2,k,kptr,i,j,ie,ic,nt,nlyr_tot,nlyr_tom,ssize
   real (kind=real_kind), dimension(np,np,2,nlev,nets:nete)      :: vtens
   real (kind=real_kind), dimension(np,np,nlev,4,nets:nete)      :: stens  ! dp3d,theta,w,phi
 
@@ -3449,25 +585,18 @@ contains
   real (kind=real_kind) :: pnh(np,np,nlevp)    
   real (kind=real_kind) :: temp(np,np,nlev)    
   real (kind=real_kind) :: temp_i(np,np,nlevp)    
-  real (kind=real_kind) :: dt
-  real (kind=real_kind) :: ps_ref(np,np)
+  real (kind=real_kind) :: dt,xfac
 
-  real (kind=real_kind) :: theta_ref(np,np,nlev,nets:nete)
-  real (kind=real_kind) :: phi_ref(np,np,nlevp,nets:nete)
-  real (kind=real_kind) :: dp_ref(np,np,nlev,nets:nete)
-
-  real (kind=real_kind) :: v0(np,np,2,nlevp),eps
-  real (kind=real_kind) :: w0(np,np,nlevp)
   integer :: l1p,l2p,l1n,l2n,l
   call t_startf('advance_hypervis')
 
-  dt=dt2/hypervis_subcycle
-
   if (theta_hydrostatic_mode) then
      nlyr_tot=4*nlev        ! dont bother to dss w_i and phinh_i
+     nlyr_tom=4*nlev_tom
      ssize=2*nlev
   else
      nlyr_tot=6*nlev  ! total amount of data for DSS
+     nlyr_tom=6*nlev_tom
      ssize=4*nlev
   endif
   
@@ -3476,44 +605,7 @@ contains
   enddo
 
 
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-! NOTE1:  Diffusion works best when applied to theta instead of theta_dp
-! It creates some TOM noise when applied to vtheta_dp in DCMIP 2.0 test
-! so we convert from vtheta_dp->theta, and then convert back at the end of diffusion
-!
-! NOTE2: in dcmip2012 test2.0, using theta_ref does improve solution, but
-!        phi_ref has no impact
-!
-! NOTE3: in HS w/topo tests, theta_ref(dp_ref) as opposed to computing it as a 
-!        function of dp3d is less noisy at cube edges
-! 
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-! compute reference states
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   do ie=nets,nete
-     !ps_ref(:,:) = hvcoord%hyai(1)*hvcoord%ps0 + sum(elem(ie)%state%dp3d(:,:,:,nt),3)
-     ps_ref(:,:) = hvcoord%ps0 * exp ( -elem(ie)%state%phis(:,:)/(Rgas*300))  ! 300K ref temperature
-     !ps_ref(:,:) = hvcoord%ps0 - 11.3*elem(ie)%state%phis(:,:)/g
-     do k=1,nlev
-        dp_ref(:,:,k,ie) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
-             (hvcoord%hybi(k+1)-hvcoord%hybi(k))*ps_ref(:,:)
-     enddo
-
-
-     ! phi_ref,theta_ref depend only on ps:
-     call set_theta_ref(hvcoord,dp_ref(:,:,:,ie),theta_ref(:,:,:,ie))
-     temp(:,:,:)=theta_ref(:,:,:,ie)*dp_ref(:,:,:,ie) 
-     call phi_from_eos(hvcoord,elem(ie)%state%phis,&
-          temp(:,:,:),dp_ref(:,:,:,ie),phi_ref(:,:,:,ie))
-#if 0
-     ! no reference state, for testing
-     theta_ref(:,:,:,ie)=0
-     phi_ref(:,:,:,ie)=0
-     dp_ref(:,:,:,ie)=0
-#endif
-
      ! convert vtheta_dp -> theta
      do k=1,nlev
         elem(ie)%state%vtheta_dp(:,:,k,nt)=&
@@ -3525,57 +617,61 @@ contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   !  hyper viscosity
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  dt=dt2/hypervis_subcycle
   do ic=1,hypervis_subcycle
      do ie=nets,nete
-         do k=1,nlev
-           elem(ie)%state%vtheta_dp(:,:,k,nt)=elem(ie)%state%vtheta_dp(:,:,k,nt)-&
-                theta_ref(:,:,k,ie)
-           elem(ie)%state%phinh_i(:,:,k,nt)=elem(ie)%state%phinh_i(:,:,k,nt)-&
-                phi_ref(:,:,k,ie)
-           elem(ie)%state%dp3d(:,:,k,nt)=elem(ie)%state%dp3d(:,:,k,nt)-&
-                dp_ref(:,:,k,ie)
-        enddo
+        ! remove ref state
+        elem(ie)%state%vtheta_dp(:,:,:,nt)=elem(ie)%state%vtheta_dp(:,:,:,nt)-&
+             elem(ie)%derived%theta_ref(:,:,:)
+        elem(ie)%state%phinh_i(:,:,:,nt)=elem(ie)%state%phinh_i(:,:,:,nt)-&
+             elem(ie)%derived%phi_ref(:,:,:)
+        elem(ie)%state%dp3d(:,:,:,nt)=elem(ie)%state%dp3d(:,:,:,nt)-&
+             elem(ie)%derived%dp_ref(:,:,:)
      enddo
      
      call biharmonic_wk_theta(elem,stens,vtens,deriv,edge_g,hybrid,nt,nets,nete)
      
      do ie=nets,nete
+        !add ref state back
+        elem(ie)%state%vtheta_dp(:,:,:,nt)=elem(ie)%state%vtheta_dp(:,:,:,nt)+&
+             elem(ie)%derived%theta_ref(:,:,:)
+        elem(ie)%state%phinh_i(:,:,:,nt)=elem(ie)%state%phinh_i(:,:,:,nt)+&
+             elem(ie)%derived%phi_ref(:,:,:)
+        elem(ie)%state%dp3d(:,:,:,nt)=elem(ie)%state%dp3d(:,:,:,nt)+&
+             elem(ie)%derived%dp_ref(:,:,:)
+        
         
         ! comptue mean flux
         if (nu_p>0) then
            elem(ie)%derived%dpdiss_ave(:,:,:)=elem(ie)%derived%dpdiss_ave(:,:,:)+&
-                (eta_ave_w*elem(ie)%state%dp3d(:,:,:,nt)+dp_ref(:,:,:,ie))/hypervis_subcycle
+                eta_ave_w*elem(ie)%state%dp3d(:,:,:,nt)/hypervis_subcycle
            elem(ie)%derived%dpdiss_biharmonic(:,:,:)=elem(ie)%derived%dpdiss_biharmonic(:,:,:)+&
                 eta_ave_w*stens(:,:,:,1,ie)/hypervis_subcycle
         endif
         do k=1,nlev
-           ! advace in time.
-           ! note: DSS commutes with time stepping, so we can time advance and then DSS.
-           ! note: weak operators alreayd have mass matrix "included"
-           
-           ! biharmonic terms need a negative sign:
-           if (nu_top>0 .and. nu_scale_top(k)>1) then
-              ! add regular diffusion near top
+           vtens(:,:,:,k,ie)=-nu  *vtens(:,:,:,k,ie) ! u,v
+           stens(:,:,k,1,ie)=-nu_p*stens(:,:,k,1,ie) ! dp3d
+           stens(:,:,k,2,ie)=-nu  *stens(:,:,k,2,ie) ! theta
+           stens(:,:,k,3,ie)=-nu  *stens(:,:,k,3,ie) ! w
+           stens(:,:,k,4,ie)=-nu_s*stens(:,:,k,4,ie) ! phi
+        enddo
+        if (nu_top>0 .and. hypervis_subcycle_tom==0) then
+           do k=1,nlev_tom
+              !vtheta_dp(:,:)=elem(ie)%state%vtheta_dp(:,:,k,nt)*elem(ie)%state%dp3d(:,:,k,nt)/hvcoord%dp0(k)
               lap_s(:,:,1)=laplace_sphere_wk(elem(ie)%state%dp3d       (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
-              lap_s(:,:,2)=laplace_sphere_wk(elem(ie)%state%vtheta_dp  (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
+              !lap_s(:,:,2)=laplace_sphere_wk(vtheta_dp                           ,deriv,elem(ie),var_coef=.false.)
+              lap_s(:,:,2)=laplace_sphere_wk(elem(ie)%state%vtheta_dp(:,:,k,nt)  ,deriv,elem(ie),var_coef=.false.)
               lap_s(:,:,3)=laplace_sphere_wk(elem(ie)%state%w_i        (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
               lap_s(:,:,4)=laplace_sphere_wk(elem(ie)%state%phinh_i    (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
               lap_v=vlaplace_sphere_wk(elem(ie)%state%v(:,:,:,k,nt),deriv,elem(ie),var_coef=.false.)
-              
-              vtens(:,:,:,k,ie)=(  -nu*vtens(:,:,:,k,ie) + nu_scale_top(k)*nu_top*lap_v(:,:,:)) ! u and v
-              stens(:,:,k,1,ie)=(-nu_p*stens(:,:,k,1,ie) + nu_scale_top(k)*nu_top*lap_s(:,:,1)) ! dp3d
-              stens(:,:,k,2,ie)=(  -nu*stens(:,:,k,2,ie) + nu_scale_top(k)*nu_top*lap_s(:,:,2)) ! theta
-              stens(:,:,k,3,ie)=(  -nu*stens(:,:,k,3,ie) + nu_scale_top(k)*nu_top*lap_s(:,:,3)) ! w
-              stens(:,:,k,4,ie)=(-nu_s*stens(:,:,k,4,ie) + nu_scale_top(k)*nu_top*lap_s(:,:,4)) ! phi
-           else
-              vtens(:,:,:,k,ie)=-nu  *vtens(:,:,:,k,ie) ! u,v
-              stens(:,:,k,1,ie)=-nu_p*stens(:,:,k,1,ie) ! dp3d
-              stens(:,:,k,2,ie)=-nu  *stens(:,:,k,2,ie) ! theta
-              stens(:,:,k,3,ie)=-nu  *stens(:,:,k,3,ie) ! w
-              stens(:,:,k,4,ie)=-nu_s*stens(:,:,k,4,ie) ! phi
-           endif
-           
-        enddo
+
+              vtens(:,:,:,k,ie)=vtens(:,:,:,k,ie) + nu_scale_top(k)*nu_top*lap_v(:,:,:) ! u and v
+              stens(:,:,k,1,ie)=stens(:,:,k,1,ie) + nu_scale_top(k)*nu_top*lap_s(:,:,1) ! dp3d
+              stens(:,:,k,2,ie)=stens(:,:,k,2,ie) + nu_scale_top(k)*nu_top*lap_s(:,:,2) ! theta
+              stens(:,:,k,3,ie)=stens(:,:,k,3,ie) + nu_scale_top(k)*nu_top*lap_s(:,:,3) ! w
+              stens(:,:,k,4,ie)=stens(:,:,k,4,ie) + nu_scale_top(k)*nu_top*lap_s(:,:,4) ! phi
+           enddo
+        endif
         
         kptr=0;      call edgeVpack_nlyr(edge_g,elem(ie)%desc,vtens(:,:,:,:,ie),2*nlev,kptr,nlyr_tot)
         kptr=2*nlev; call edgeVpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,:,ie),ssize,kptr,nlyr_tot)
@@ -3603,27 +699,6 @@ contains
            stens(:,:,k,3,ie)=dt*stens(:,:,k,3,ie)*elem(ie)%rspheremp(:,:)  ! w
            stens(:,:,k,4,ie)=dt*stens(:,:,k,4,ie)*elem(ie)%rspheremp(:,:)  ! phi
            
-           !add ref state back
-           elem(ie)%state%vtheta_dp(:,:,k,nt)=elem(ie)%state%vtheta_dp(:,:,k,nt)+&
-                theta_ref(:,:,k,ie)
-           elem(ie)%state%phinh_i(:,:,k,nt)=elem(ie)%state%phinh_i(:,:,k,nt)+&
-                phi_ref(:,:,k,ie)
-           elem(ie)%state%dp3d(:,:,k,nt)=elem(ie)%state%dp3d(:,:,k,nt)+&
-                dp_ref(:,:,k,ie)
-           
-        enddo
-        
-        do k=1,nlev
-           elem(ie)%state%v(:,:,:,k,nt)=elem(ie)%state%v(:,:,:,k,nt) + &
-                vtens(:,:,:,k,ie)
-           elem(ie)%state%w_i(:,:,k,nt)=elem(ie)%state%w_i(:,:,k,nt) &
-                +stens(:,:,k,3,ie)
-           
-           elem(ie)%state%dp3d(:,:,k,nt)=elem(ie)%state%dp3d(:,:,k,nt) &
-                +stens(:,:,k,1,ie)
-           
-           elem(ie)%state%phinh_i(:,:,k,nt)=elem(ie)%state%phinh_i(:,:,k,nt) &
-                +stens(:,:,k,4,ie)
         enddo
         
         
@@ -3641,13 +716,14 @@ contains
         ! 
         ! compute exner needed for heating term and IE scaling
         ! this is using a mixture of data before viscosity and after viscosity 
+#if 0
         temp(:,:,:)=elem(ie)%state%vtheta_dp(:,:,:,nt)*elem(ie)%state%dp3d(:,:,:,nt)
         call pnh_and_exner_from_eos(hvcoord,temp,&
              elem(ie)%state%dp3d(:,:,:,nt),elem(ie)%state%phinh_i(:,:,:,nt),&
              pnh,exner,temp_i,caller='advance_hypervis')
         
         do k=1,nlev
-           k2=max(k,nlev)
+           k2=min(k+1,nlev)
            if (theta_hydrostatic_mode) then
               heating(:,:,k)= (elem(ie)%state%v(:,:,1,k,nt)*vtens(:,:,1,k,ie) + &
                    elem(ie)%state%v(:,:,2,k,nt)*vtens(:,:,2,k,ie) ) / &
@@ -3660,10 +736,33 @@ contains
                      elem(ie)%state%w_i(:,:,k2,nt)*stens(:,:,k2,3,ie))/2 ) /  &
                    (exner(:,:,k)*Cp)  
            endif
+           !elem(ie)%state%vtheta_dp(:,:,k,nt)=elem(ie)%state%vtheta_dp(:,:,k,nt) &
+           !     +stens(:,:,k,2,ie)*hvcoord%dp0(k)*exner0(k)/(exner(:,:,k)*elem(ie)%state%dp3d(:,:,k,nt)&
+           !     )  -heating(:,:,k)
            elem(ie)%state%vtheta_dp(:,:,k,nt)=elem(ie)%state%vtheta_dp(:,:,k,nt) &
-                +stens(:,:,k,2,ie)*hvcoord%dp0(k)*exner0(k)/(exner(:,:,k)*elem(ie)%state%dp3d(:,:,k,nt)&
-                )  -heating(:,:,k)
+                  -heating(:,:,k)
         enddo
+#endif
+
+        do k=1,nlev
+           elem(ie)%state%v(:,:,:,k,nt)=elem(ie)%state%v(:,:,:,k,nt) + &
+                vtens(:,:,:,k,ie)
+           elem(ie)%state%w_i(:,:,k,nt)=elem(ie)%state%w_i(:,:,k,nt) &
+                +stens(:,:,k,3,ie)
+           
+           elem(ie)%state%dp3d(:,:,k,nt)=elem(ie)%state%dp3d(:,:,k,nt) &
+                +stens(:,:,k,1,ie)
+           
+           elem(ie)%state%phinh_i(:,:,k,nt)=elem(ie)%state%phinh_i(:,:,k,nt) &
+                +stens(:,:,k,4,ie)
+
+           elem(ie)%state%vtheta_dp(:,:,k,nt)=elem(ie)%state%vtheta_dp(:,:,k,nt) &
+                +stens(:,:,k,2,ie)
+        enddo
+
+
+
+
      enddo ! ie
   enddo  ! subcycle
 
@@ -3676,6 +775,91 @@ contains
      elem(ie)%state%w_i(:,:,nlevp,nt) = (elem(ie)%state%v(:,:,1,nlev,nt)*elem(ie)%derived%gradphis(:,:,1) + &
           elem(ie)%state%v(:,:,2,nlev,nt)*elem(ie)%derived%gradphis(:,:,2))/g
   enddo	
+
+
+
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !  sponge layer
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  if (nu_top>0 .and. hypervis_subcycle_tom>0 ) then
+  dt=dt2/hypervis_subcycle_tom
+  do ic=1,hypervis_subcycle_tom
+     do ie=nets,nete
+        do k=1,nlev_tom
+           ! add regular diffusion near top
+           lap_s(:,:,1)=laplace_sphere_wk(elem(ie)%state%dp3d     (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
+           lap_s(:,:,2)=laplace_sphere_wk(elem(ie)%state%vtheta_dp(:,:,k,nt),deriv,elem(ie),var_coef=.false.)
+           lap_s(:,:,3)=laplace_sphere_wk(elem(ie)%state%w_i      (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
+           lap_s(:,:,4)=laplace_sphere_wk(elem(ie)%state%phinh_i  (:,:,k,nt),deriv,elem(ie),var_coef=.false.)
+           lap_v=vlaplace_sphere_wk(elem(ie)%state%v            (:,:,:,k,nt),deriv,elem(ie),var_coef=.false.)
+           
+           xfac=dt*nu_scale_top(k)*nu_top
+
+           vtens(:,:,:,k,ie)=xfac*lap_v(:,:,:)
+           stens(:,:,k,1,ie)=xfac*lap_s(:,:,1)  ! dp3d
+           stens(:,:,k,2,ie)=xfac*lap_s(:,:,2)  ! vtheta_dp
+           stens(:,:,k,3,ie)=xfac*lap_s(:,:,3)  ! w_i
+           stens(:,:,k,4,ie)=xfac*lap_s(:,:,4)  ! phi_i
+        enddo
+        
+        kptr=0;      
+        call edgeVpack_nlyr(edge_g,elem(ie)%desc,vtens(:,:,:,:,ie),2*nlev_tom,kptr,nlyr_tom)
+        kptr=2*nlev_tom; 
+        call edgeVpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,1,ie),nlev_tom,kptr,nlyr_tom)
+        kptr=kptr+nlev_tom
+        call edgeVpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,2,ie),nlev_tom,kptr,nlyr_tom)
+        if (.not.theta_hydrostatic_mode) then
+           kptr=kptr+nlev_tom
+           call edgeVpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,3,ie),nlev_tom,kptr,nlyr_tom)
+           kptr=kptr+nlev_tom
+           call edgeVpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,4,ie),nlev_tom,kptr,nlyr_tom)
+        endif
+     enddo
+     
+     call t_startf('ahdp_bexchV2')
+     call bndry_exchangeV(hybrid,edge_g)
+     call t_stopf('ahdp_bexchV2')
+     
+     do ie=nets,nete
+        
+        kptr=0
+        call edgeVunpack_nlyr(edge_g,elem(ie)%desc,vtens(:,:,:,:,ie),2*nlev_tom,kptr,nlyr_tom)
+        kptr=2*nlev_tom
+        call edgeVunpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,1,ie),nlev_tom,kptr,nlyr_tom)
+        kptr=kptr+nlev_tom
+        call edgeVunpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,2,ie),nlev_tom,kptr,nlyr_tom)
+        if (.not.theta_hydrostatic_mode) then
+           kptr=kptr+nlev_tom
+           call edgeVunpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,3,ie),nlev_tom,kptr,nlyr_tom)
+           kptr=kptr+nlev_tom
+           call edgeVunpack_nlyr(edge_g,elem(ie)%desc,stens(:,:,:,4,ie),nlev_tom,kptr,nlyr_tom)
+        endif
+        
+        
+        ! apply inverse mass matrix, add tendency
+        do k=1,nlev_tom
+           elem(ie)%state%v(:,:,1,k,nt)=elem(ie)%state%v(:,:,1,k,nt) + &
+                vtens(:,:,1,k,ie)*elem(ie)%rspheremp(:,:)
+           elem(ie)%state%v(:,:,2,k,nt)=elem(ie)%state%v(:,:,2,k,nt) + &
+                vtens(:,:,2,k,ie)*elem(ie)%rspheremp(:,:)
+           elem(ie)%state%w_i(:,:,k,nt)=elem(ie)%state%w_i(:,:,k,nt) &
+                +stens(:,:,k,3,ie)*elem(ie)%rspheremp(:,:)
+           
+           elem(ie)%state%dp3d(:,:,k,nt)=elem(ie)%state%dp3d(:,:,k,nt) &
+                +stens(:,:,k,1,ie)*elem(ie)%rspheremp(:,:)
+           elem(ie)%state%phinh_i(:,:,k,nt)=elem(ie)%state%phinh_i(:,:,k,nt) &
+                +stens(:,:,k,4,ie)*elem(ie)%rspheremp(:,:)
+
+           elem(ie)%state%vtheta_dp(:,:,k,nt)=elem(ie)%state%vtheta_dp(:,:,k,nt) &
+                +stens(:,:,k,2,ie)*elem(ie)%rspheremp(:,:)
+        enddo
+     enddo ! ie
+  enddo  ! subcycle
+  endif
+
+
 
   call t_stopf('advance_hypervis')
 
@@ -3929,6 +1113,7 @@ contains
   else
      nlyr_tot=5*nlev+nlevp  ! total amount of data for DSS
   endif
+     
   do ie=nets,nete
      dp3d  => elem(ie)%state%dp3d(:,:,:,n0)
      vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,n0)
@@ -3943,7 +1128,7 @@ contains
         do j=1,np
         do i=1,np
            if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)) >1e-10) then
-              write(iulog,*) 'WARNING: w(n0) does not satisfy b.c.',ie,i,j,k
+              write(iulog,*) 'WARNING:CAAR w(n0) does not satisfy b.c.',ie,i,j,k
               write(iulog,*) 'val1 = ',temp(i,j,1)
               write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,n0)
               write(iulog,*) 'diff: ',temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,n0)
@@ -3958,17 +1143,14 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if (scale3.ne.0d0) then
-             if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
-                write(iulog,*) 'WARNING: before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
-                write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
-                write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
-             endif
+           if ((phi_i(i,j,k)-phi_i(i,j,k+1)) < g) then
+              write(iulog,*) 'WARNING:CAAR before ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
+              write(iulog,*) 'phi(i,j,k)=  ',phi_i(i,j,k)
+              write(iulog,*) 'phi(i,j,k+1)=',phi_i(i,j,k+1)
            endif
         enddo
         enddo
         enddo
-        
      endif
 #endif
 
@@ -4140,10 +1322,20 @@ contains
         w_tens(:,:,k) = (-w_vadv_i(:,:,k) - v_gradw_i(:,:,k))*scale1 - scale2*g*(1-dpnh_dp_i(:,:,k) )
 
         ! phi - tendency on interfaces
+        ! vtemp(:,:,:,k) = gradphinh_i(:,:,:,k) + &
+        !    (scale2-1)*hvcoord%hybi(k)*elem(ie)%derived%gradphis(:,:,:)
         v_gradphinh_i(:,:,k) = v_i(:,:,1,k)*gradphinh_i(:,:,1,k) &
              +v_i(:,:,2,k)*gradphinh_i(:,:,2,k) 
         phi_tens(:,:,k) =  (-phi_vadv_i(:,:,k) - v_gradphinh_i(:,:,k))*scale1 &
           + scale2*g*elem(ie)%state%w_i(:,:,k,n0)
+        if (scale1/=scale2) then
+           ! add imex phi_h splitting 
+           ! use approximate phi_h = hybi*phis 
+           ! could also use true hydrostatic pressure, but this requires extra DSS in dirk()
+           phi_tens(:,:,k) =  phi_tens(:,:,k)+(scale1-scale2)*(&
+                v_i(:,:,1,k)*elem(ie)%derived%gradphis(:,:,1) + &
+                v_i(:,:,2,k)*elem(ie)%derived%gradphis(:,:,2) )*hvcoord%hybi(k)
+        endif
      end do
 
 
@@ -4325,7 +1517,7 @@ contains
                
                !  Form IEvert1
                elem(ie)%accum%IEvert1(i,j)=elem(ie)%accum%IEvert1(i,j)      &
-                    -exner(i,j,k)*theta_vadv(i,j,k)                        
+                    -Cp*exner(i,j,k)*theta_vadv(i,j,k)                        
                ! Form IEvert2 
                ! here use of dpnh_dp_i on boundry (with incorrect data)
                ! is harmess becuase eta_dot_dpdn=0
@@ -4479,7 +1671,7 @@ contains
              elem(ie)%state%w_i(:,:,nlevp,np1)) / &
              (g + ( elem(ie)%derived%gradphis(:,:,1)**2 + &
              elem(ie)%derived%gradphis(:,:,2)**2)/(2*g))   )  / dt2
-        
+
         ! update solution with new dpnh_dp_i value:
         elem(ie)%state%w_i(:,:,nlevp,np1) = elem(ie)%state%w_i(:,:,nlevp,np1) +&
              scale1*dt2*g*(dpnh_dp_i(:,:,nlevp)-1)
@@ -4502,7 +1694,7 @@ contains
         do j=1,np
         do i=1,np
            if ( abs(temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)) >1e-10) then
-              write(iulog,*) 'WARNING: w(np1) does not satisfy b.c.',ie,i,j,k
+              write(iulog,*) 'WARNING:CAAR w(np1) does not satisfy b.c.',ie,i,j,k
               write(iulog,*) 'val1 = ',temp(i,j,1)
               write(iulog,*) 'val2 = ',elem(ie)%state%w_i(i,j,nlevp,np1)
               write(iulog,*) 'diff: ',temp(i,j,1)-elem(ie)%state%w_i(i,j,nlevp,np1)
@@ -4514,1255 +1706,119 @@ contains
         do k=1,nlev
         do j=1,np
         do i=1,np
-           if (scale3.ne.0d0) then
-             if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g) then
-                write(iulog,*) 'WARNING: after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
-                write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
-                write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)
-             endif
-           end if
+           if ((elem(ie)%state%phinh_i(i,j,k,np1)-elem(ie)%state%phinh_i(i,j,k+1,np1)) < g) then
+              write(iulog,*) 'WARNING:CAAR after ADV, delta z < 1m. ie,i,j,k=',ie,i,j,k
+              write(iulog,*) 'phi(i,j,k)=  ',elem(ie)%state%phinh_i(i,j,k,np1)
+              write(iulog,*) 'phi(i,j,k+1)=',elem(ie)%state%phinh_i(i,j,k+1,np1)
+           endif
         enddo
         enddo
         enddo
 #endif
      endif
-
+     if (scale3 /= 0) then
+       call limiter_dp3d_k(elem(ie)%state%dp3d(:,:,:,np1),elem(ie)%state%vtheta_dp(:,:,:,np1),&
+            elem(ie)%spheremp,hvcoord%dp0)
+     endif
   end do
   call t_stopf('compute_andor_apply_rhs')
 
   end subroutine compute_andor_apply_rhs
 
-  subroutine compute_nonlinear_rhs(np1,nm1,n0,qn0,elem,hvcoord,hybrid,&
-       deriv,nets,nete,compute_diagnostics,eta_ave_w, JacL, JacD, JacU,dt)
-  integer,              intent(in) :: np1,nm1,n0,qn0,nets,nete
-  real (kind=real_kind), intent(in) :: JacL(nlev-1,np,np, nete-nets+1), JacD(nlev,np,np,nete-nets+1), JacU(nlev-1,np,np,nete-nets+1)
-  logical,              intent(in) :: compute_diagnostics
-  type (hvcoord_t),     intent(in) :: hvcoord
-  type (hybrid_t),      intent(in) :: hybrid
-  type (element_t),     intent(inout), target :: elem(:)
-  type (derivative_t),  intent(in) :: deriv
-  real (kind=real_kind), intent(in) :: dt
 
-  real (kind=real_kind) :: eta_ave_w ! weighting for eta_dot_dpdn mean flux
-
-  ! local variables
-  real (kind=real_kind) :: wphivec(2*nlev)
-  real (kind=real_kind) :: L(2*nlev, 2*nlev)
-  real (kind=real_kind) :: wphivec2(2*nlev,np,np,nete-nets+1)
-  integer :: ii, i,j,k,ie
-
-  do ie = nets,nete
-    do i=1,np
-      do j=1,np
-        wphivec2(1:nlev,i,j,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-        wphivec2(1+nlev:2*nlev,i,j,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-      end do
-    end do
-  end do
-  call compute_andor_apply_rhs(np1,nm1,n0,qn0,1.d0,elem,hvcoord,hybrid,&
-     deriv,nets,nete,compute_diagnostics,eta_ave_w,1.d0,1.d0,0.d0)
-  do ie = nets,nete
-    do i=1,np
-      do j=1,np
-  ! Form matrix L
-        L = 0.d0
-        do ii=1,nlev-1
-          L(ii, ii+nlev) = JacD(ii,i,j,ie) ! Form tridiagonal in upper right
-          L(ii, ii+nlev+1) = JacU(ii,i,j,ie)
-          L(ii+1, ii+nlev) = JacL(ii,i,j,ie)
-    
-          L(ii+nlev,ii) = 1.d0 ! Form identity in lower left
-        end do
-        L(nlev, 2*nlev) = JacD(nlev,i,j,ie)
-        L(2*nlev, nlev) = 1.d0
-        L = g*L
-        wphivec = matmul(L,wphivec2(:,i,j,ie)) ! Calculate linear part
-  ! subtract linear part
-        elem(ie)%state%w_i(i,j,1:nlev,np1) = elem(ie)%state%w_i(i,j,1:nlev,np1) - wphivec(1:nlev)
-        elem(ie)%state%phinh_i(i,j,1:nlev,np1) = elem(ie)%state%phinh_i(i,j,1:nlev,np1) - wphivec(1+nlev:2*nlev)
-      end do
-    end do
-  end do
-  end subroutine compute_nonlinear_rhs
-
-
- 
-!===========================================================================================================
-!===========================================================================================================
-!===========================================================================================================
-!===========================================================================================================
-!===========================================================================================================
-  subroutine compute_stage_value_dirk(np1,qn0,dt2,elem,hvcoord,hybrid,&
-       deriv,nets,nete,maxiter,itertol)
-  !===================================================================================
-  ! this subroutine solves a stage value equation for a DIRK method which takes the form
+  subroutine limiter_dp3d_k(dp3d,vtheta_dp,spheremp,dp0)
+  ! mass conserving column limiter (1D only)
   !
-  ! gi = un0 + dt* sum(1:i-1)(aij n(gj)+a2ij s(gj)) + dt *a2ii s(gi) := y + dt a2ii s(gi)
+  ! if dp3d < dp3d_thresh*hvcoord%dp0 then apply vertical mixing 
+  ! to prevent layer from getting too thin
   !
-  ! It is assumed that un0 has the value of y and the computed value of gi is stored at
-  ! unp1
-  !===================================================================================
-  integer, intent(in) :: np1,qn0,nets,nete
-  real*8, intent(in) :: dt2
-  integer :: maxiter
-  real*8 :: itertol
-
-  type (hvcoord_t)     , intent(in) :: hvcoord
-  type (hybrid_t)      , intent(in) :: hybrid
-  type (element_t)     , intent(inout), target :: elem(:)
-  type (derivative_t)  , intent(in) :: deriv
-
+  ! This is rarely triggered and is mostly for safety when using 
+  ! long remap timesteps
+  !
+  implicit none
+  real (kind=real_kind), intent(inout) :: dp3d(np,np,nlev)
+  real (kind=real_kind), intent(inout) :: vtheta_dp(np,np,nlev)
+  real (kind=real_kind), intent(in) :: dp0(nlev)
+  real (kind=real_kind), intent(in) :: spheremp(np,np)  !  density
 
   ! local
-  real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
-  real (kind=real_kind), pointer, dimension(:,:,:)   :: dp3d
-  real (kind=real_kind), pointer, dimension(:,:,:)   :: vtheta_dp
-  real (kind=real_kind), pointer, dimension(:,:)   :: phis
-  real (kind=real_kind) :: JacD(nlev,np,np)  , JacL(nlev-1,np,np)
-  real (kind=real_kind) :: JacU(nlev-1,np,np), JacU2(nlev-2,np,np)
-  real (kind=real_kind) :: pnh(np,np,nlev)     ! nh (nonydro) pressure
-  real (kind=real_kind) :: dp3d_i(np,np,nlevp)
-  real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
-  real (kind=real_kind) :: exner(np,np,nlev)     ! exner nh pressure
-  real (kind=real_kind) :: w_n0(np,np,nlevp)    
-  real (kind=real_kind) :: phi_n0(np,np,nlevp)    
-  real (kind=real_kind) :: Ipiv(nlev,np,np)
-  real (kind=real_kind) :: Fn(np,np,nlev),x(nlev,np,np)
-  real (kind=real_kind) :: itererr,itererrtemp(np,np)
-  real (kind=real_kind) :: itererrmax
-  real (kind=real_kind) :: norminfr0(np,np),norminfJ0(np,np)
-  real (kind=real_kind) :: maxnorminfJ0r0
-  real (kind=real_kind) :: alpha1(np,np),alpha2(np,np)
+  real (kind=real_kind) :: Qcol(nlev)
+  real (kind=real_kind) :: mass,mass_new
+  real (kind=real_kind) :: dp3d_thresh=.125
+  real (kind=real_kind) :: vtheta_thresh = 10  ! 10 Kelvin
+  logical :: warn
+  integer i,j,k
+
+  ! first check if limter is needed, and print warning
+  warn=.false. 
+  do k=1,nlev
+     if ( minval(dp3d(:,:,k)) < dp3d_thresh*dp0(k)) then
+        write(iulog,*) 'WARNING:CAAR: dp3d too small. dt_remap may be too large'
+        write(iulog,*) 'k,dp3d(k), dp0: ',k,minval(dp3d(:,:,k)),dp0(k)
+        warn=.true.
+     endif
+  enddo
+
+  if (warn) then
+  vtheta_dp(:,:,:)=vtheta_dp(:,:,:)/dp3d(:,:,:)
+  do j = 1 , np
+     do i = 1 , np
+        if ( minval(dp3d(i,j,:) - dp3d_thresh*dp0(:)) < 0 ) then
+           ! subtract min, multiply in by weights
+           Qcol(:) = (dp3d(i,j,:) - dp3d_thresh*dp0(:))*spheremp(i,j)
+           mass = 0
+           do k = 1,nlev 
+              mass = mass + Qcol(k)
+           enddo
+
+           ! negative mass.  so reduce all postive values to zero
+           ! then increase negative values as much as possible
+           if ( mass < 0 ) Qcol = -Qcol
+           mass_new = 0
+           do k=1,nlev
+              if ( Qcol(k) < 0 ) then
+                 Qcol(k) = 0
+              else
+                 mass_new = mass_new + Qcol(k)
+              endif
+           enddo
+           ! now scale the all positive values to restore mass
+           if ( mass_new > 0 ) Qcol(:) = Qcol(:) * abs(mass) / mass_new
+           if ( mass     < 0 ) Qcol(:) = -Qcol(:)
+           ! 
+           dp3d(i,j,:) = Qcol(:)/spheremp(i,j) + dp3d_thresh*dp0(:)
+        endif
+     enddo
+  enddo
+  vtheta_dp(:,:,:)=vtheta_dp(:,:,:)*dp3d(:,:,:)
+  endif
+
+#if 1
+  ! check for theta < 10K                                                                                                       
+  warn=.false.
+  do k=1,nlev
+     if ( minval(vtheta_dp(:,:,k)-vtheta_thresh*dp3d(:,:,k))   <  0) then
+        write(iulog,*) 'WARNING:CAAR: theta<',vtheta_thresh,' applying limiter'
+        write(iulog,*) 'k,vtheta(k): ',k,minval(vtheta_dp(:,:,k)/dp3d(:,:,k))
+        warn=.true.
+     endif
+  enddo
+  if (warn) then
+  do k=1,nlev
+  do j = 1 , np
+     do i = 1 , np
+        if ( (vtheta_dp(i,j,k) - vtheta_thresh*dp3d(i,j,k)) < 0 ) then
+           vtheta_dp(i,j,k)=vtheta_thresh*dp3d(i,j,k)
+        endif
+     enddo
+  enddo
+  enddo
+  endif
+#endif
+
+
+
+
+  end subroutine limiter_dp3d_k
 
-  real (kind=real_kind) :: Jac2D(nlev,np,np)  , Jac2L(nlev-1,np,np)
-  real (kind=real_kind) :: Jac2U(nlev-1,np,np)
-
-  integer :: i,j,k,l,ie,itercount,info(np,np),itercountmax
-  integer :: nsafe
-
-
-
-  itercountmax=0
-  itererrmax=0.d0
-
-  call t_startf('compute_stage_value_dirk')
-  do ie=nets,nete
-    w_n0 = elem(ie)%state%w_i(:,:,:,np1)
-    phi_n0 = elem(ie)%state%phinh_i(:,:,:,np1)
-    itercount=0
-
-    ! approximate the initial error of f(x) \approx 0
-    dp3d  => elem(ie)%state%dp3d(:,:,:,np1)
-    vtheta_dp  => elem(ie)%state%vtheta_dp(:,:,:,np1)
-    phi_np1 => elem(ie)%state%phinh_i(:,:,:,np1)
-    phis => elem(ie)%state%phis(:,:)
-
-    call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk1')
-
-    dp3d_i(:,:,1) = dp3d(:,:,1)
-    dp3d_i(:,:,nlevp) = dp3d(:,:,nlev)
-    do k=2,nlev
-       dp3d_i(:,:,k)=(dp3d(:,:,k)+dp3d(:,:,k-1))/2
-    end do
-
-   ! we first compute the initial Jacobian J0 and residual r0 and their infinity norms
-    do k=1,nlev
-     Fn(:,:,k) = phi_np1(:,:,k)-phi_n0(:,:,k) &
-       - dt2*g*w_n0(:,:,k) + (dt2*g)**2 * (1.0-dpnh_dp_i(:,:,k))
-    enddo
-
-     norminfr0=0.d0
-     norminfJ0=0.d0
-      ! Here's how to call inexact Jacobian
-!     call get_dirk_jacobian(Jac2L,Jac2D,Jac2U,dt2,dp3d,phi_np1,pnh,0,&
-!       1d-6,hvcoord,dpnh_dp_i,vtheta_dp)
-      ! here's the call to the exact Jacobian
-     call get_dirk_jacobian(JacL,JacD,JacU,dt2,dp3d,phi_np1,pnh,1)
-
-    ! compute dp3d-weighted infinity norms of the initial Jacobian and residual
-     do i=1,np
-     do j=1,np
-       itererrtemp(i,j)=0 
-       do k=1,nlev
-        norminfr0(i,j)=max(norminfr0(i,j),abs(Fn(i,j,k)) *dp3d_i(i,j,k))
-        if (k.eq.1) then
-          norminfJ0(i,j) = max(norminfJ0(i,j),(dp3d_i(i,j,k)*abs(JacD(k,i,j))+dp3d_i(i,j,k+1))*abs(JacU(k,i,j)))
-        elseif (k.eq.nlev) then
-          norminfJ0(i,j) = max(norminfJ0(i,j),(dp3d_i(i,j,k-1)*abs(JacL(k,i,j))+abs(JacD(k,i,j))*dp3d(i,j,k)))
-        else
-          norminfJ0(i,j) = max(norminfJ0(i,j),(dp3d_i(i,j,k-1)*abs(JacL(k,i,j))+dp3d_i(i,j,k)*abs(JacD(k,i,j))+ &
-            dp3d_i(i,j,k+1)*abs(JacU(k,i,j))))
-        end if
-        itererrtemp(i,j)=itererrtemp(i,j)+Fn(i,j,k)**2.d0 *dp3d_i(i,j,k)
-      end do
-      itererrtemp(i,j)=sqrt(itererrtemp(i,j))
-    end do
-    end do
-
-    maxnorminfJ0r0=max(maxval(norminfJ0(:,:)),maxval(norminfr0(:,:)))
-    itererr=maxval(itererrtemp(:,:))/maxnorminfJ0r0
-    
-    do while ((itercount < maxiter).and.(itererr > itertol))
-
-      info(:,:) = 0
-      ! Here's how to call inexact Jacobian
-!      call get_dirk_jacobian(JacL,JacD,JacU,dt2,dp3d,phi_np1,pnh,0,&
-!       1d-4,hvcoord,dpnh_dp_i,vtheta_dp)
-      ! here's the call to the exact Jacobian
-       call get_dirk_jacobian(JacL,JacD,JacU,dt2,dp3d,phi_np1,pnh,1)
-
- 
-      do i=1,np
-      do j=1,np
-        x(1:nlev,i,j) = -Fn(i,j,1:nlev)  !+Fn(i,j,nlev+1:2*nlev,1)/(g*dt2))
-        call DGTTRF(nlev, JacL(:,i,j), JacD(:,i,j),JacU(:,i,j),JacU2(:,i,j), Ipiv(:,i,j), info(i,j) )
-        ! Tridiagonal solve
-        call DGTTRS( 'N', nlev,1, JacL(:,i,j), JacD(:,i,j), JacU(:,i,j), JacU2(:,i,j), Ipiv(:,i,j),x(:,i,j), nlev, info(i,j) )
-        ! update approximate solution of phi
-        phi_np1(i,j,1:nlev) = phi_np1(i,j,1:nlev) + x(1:nlev,i,j)
-
-        do nsafe=1,8
-           if (all(phi_np1(i,j,1:nlev) > phi_np1(i,j,2:nlevp))) exit
-           ! remove the last netwon increment, try reduced increment
-           phi_np1(i,j,1:nlev) = phi_np1(i,j,1:nlev) - x(1:nlev,i,j)/(2**nsafe)
-        enddo
-        if (nsafe>1) print *,'WARNING: reducing newton increment, nsafe=',nsafe
-        ! if nsafe>1, code will probably crash soon
-        ! if nsafe>8, code will crash in next call to pnh_and_exner_from_eos
-      end do
-      end do
-      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_np1,pnh,exner,dpnh_dp_i,caller='dirk2')
-
-      ! update approximate solution of w
-      elem(ie)%state%w_i(:,:,1:nlev,np1) = w_n0(:,:,1:nlev) - g*dt2 * &
-        (1.0-dpnh_dp_i(:,:,1:nlev))
-      ! update right-hand side of phi
-      do k=1,nlev
-         Fn(:,:,k) = phi_np1(:,:,k)-phi_n0(:,:,k) &
-              - dt2*g*w_n0(:,:,k) + (dt2*g)**2 * (1.0-dpnh_dp_i(:,:,k))
-      enddo
-      ! compute relative errors
-      itererrtemp=0.d0
-      do i=1,np
-      do j=1,np
-        do k=1,nlev
-          itererrtemp(i,j)=itererrtemp(i,j)+Fn(i,j,k)**2.d0 *dp3d_i(i,j,k)
-        end do
-        itererrtemp(i,j)=sqrt(itererrtemp(i,j))
-      end do
-      end do
-      itererr=maxval(itererrtemp(:,:))/maxnorminfJ0r0
-
-      ! update iteration count and error measure
-      itercount=itercount+1
-    end do ! end do for the do while loop
-
-    if (itercount >= maxiter) then
-      call abortmp('Error: nonlinear solver failed b/c max iteration count was met')
-    end if
-    itercountmax=max(itercount,itercountmax)
-    itererrmax=max(itererrmax,itererr)
-  end do ! end do for the ie=nets,nete loop
-
-  ! return max iteraitons and max error
-  maxiter=itercountmax
-  itertol=itererrmax
-  call t_stopf('compute_stage_value_dirk')
-
-
-  end subroutine compute_stage_value_dirk
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential(JacL, JacD, JacU, dimDiag, dt, expJ, w)
-  !===================================================================================
-  ! Using a Pade approximation,
-  ! this subroutine calculates the matrix exponential of the matrix of the form
-  !    [ 0       g*dt*T
-  !      g*dt*I       0 ],
-  ! where the tridiagonal matrix T is given by the input vectors JacL, JacD, and JacU
-  !
-  ! This matrix exponential is returned as expJ. The product (e^J)*w is also
-  ! calculated, and returned as w.
-  !===================================================================================
-
-  real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
-  integer, intent(in) :: dimDiag
-  real (kind=real_kind), intent(in) :: dt
-  real (kind=real_kind), intent(out) :: expJ(2*dimDiag, 2*dimDiag)
-  real (kind=real_kind), dimension(:), intent(inout), optional :: w 
-  ! local variables
-  real (kind=real_kind) :: N(2*dimDiag,2*dimDiag), D(2*dimDiag,2*dimDiag), &
-    Aj(2*dimDiag,2*dimDiag), negAj(2*dimDiag,2*dimDiag), Jac(2*dimDiag,2*dimDiag), &
-    Dinv(2*dimDiag,2*dimDiag), iden(2*dimDiag,2*dimDiag), DinvN(2*dimDiag,2*dimDiag),&
-    Tri(dimDiag,dimDiag)
-  real (kind=real_kind) :: work(2*dimDiag)
-  integer :: ipiv(2*dimDiag)
-  real (kind=real_kind) normJ, pfac, fac, alpha
-  integer i,j,p,q,info, maxiter, k, dimJac 
-
-  p = 2  ! parameter used in diagonal Pade approximation
-  q = 2
-  pfac = 1.d0/gamma(dble(p+q+1.d0))
-  ! Initialize random A and normalize
-  dimJac = 2*dimDiag
-  call formJac(JacL,JacD,JacU,dt,Jac)
-  ! Scaling by power of 2
-  maxiter = 10000
-  k = 0
-  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
-    Jac = Jac / 2.d0
-    k = k + 1
-  end do ! end while loop
-
-  Tri = 0.d0
-  do i = 1, (dimDiag-1)
-    Tri(i,i) = Jac(i,(i+dimDiag))
-    Tri(i,i+1) = Jac(i,(i+1+dimDiag))
-    Tri(i+1,i) = Jac((i+1),(i+dimDiag))
-  end do
-  Tri(dimDiag, dimDiag) = Jac(dimDiag, dimJac)
-  alpha = Jac((dimDiag + 1), 1)  ! scalar multiple of identity in lower left
-  Tri = Tri / alpha
-  ! Initialize Aj,negAj = identity and N,D = 0.
-  N = 0.d0
-  D = 0.d0
-  Aj = 0.d0
-  negAj = 0.d0
-  Dinv = 0.d0
-  iden = 0.d0
-  expJ = 0.d0
-
-  work = 0.d0
-  ipiv = 0
-
-  do i = 1,dimJac
-    Aj(i,i) = 1.d0
-    negAj(i,i) = 1.d0
-    iden(i,i) = 1.d0
-  enddo ! end do loop
-
-  ! series for Pade approximation
-  do i=0,p
-    fac = gamma(dble(p+q-i+1.d0))*gamma(dble(p+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(p-i+1.d0)))*pfac
-    N = N + fac*Aj
-    Aj = matmul(Aj,Jac)
-  enddo ! end do loop for Pade approx
-
-  do i=0,q
-    fac = gamma(dble(p+q-i+1.d0))*gamma(dble(q+1.d0))/(gamma(dble(i+1.d0))*gamma(dble(q-i+1.d0)))*pfac
-    D = D + fac*negAj
-    negAj = matmul(negAj,-Jac)
-  enddo ! end do loop for Pade approx
-
-  ! Invert matrix D
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
-!  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac)  ! using full LU factorization
-
-  ! Squaring
-  do i=1,k
-    expJ = matmul(expJ, expJ)
-  end do
-  if (present(w)) then
-    w = matmul(expJ, w)
-  end if
-
-  end subroutine matrix_exponential
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  subroutine matrix_exponential_new(JacL, JacD, JacU, dt, expJ, wphi)
-  !===================================================================================
-  ! Using a Pade approximation,
-  ! this subroutine calculates the matrix exponential of the matrix of the form
-  !    [ 0       g*dt*T
-  !      g*dt*I       0 ],
-  ! where the tridiagonal matrix T is given by the input vectors JacL, JacD, and JacU
-  !
-  ! This matrix exponential is returned as expJ. The product (e^J)*wphi is also
-  ! calculated, and returned as wphi.
-  !===================================================================================
-
-  real(kind=real_kind), intent(in)  :: JacL(nlev-1), JacD(nlev), JacU(nlev-1), dt
-  real(kind=real_kind), intent(out) :: expJ(2*nlev,2*nlev)
-  real(kind=real_kind), intent(inout), optional :: wphi(2*nlev)
-
-  ! local variables
-  real(kind=real_kind) :: N(2*nlev,2*nlev), D(2*nlev,2*nlev), DinvN(2*nlev,2*nlev),&
-                          scaling_const, Jac(2*nlev,2*nlev), normJac
-  integer :: i, k, maxiter
-
-! TO DO: Approximate norm without forming Jacobian
-  ! Scaling by power of 2
-  maxiter = 15
-  k = 0
-  call formJac(JacL,JacD,JacU,dt,Jac)
-  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
-    Jac = Jac / 2.d0
-    k = k + 1
-  end do ! end while loop
-
-!  normJac = g*dt
-!  do while(normJac > 0.5/sqrt(real(nlev)))
-!    normJac = normJac/2.d0
-!    k = k+1
-!  end do
-
-  scaling_const = g*dt/(2**k) ! scaling and squaring normalization constant
-
-  ! form N(A) = I + 1/2 A + 1/12 A^2
-  N = 0.d0
-  do i = 1,nlev-1
-    ! N_11 block
-    N(i,i)   = scaling_const**2/12.d0*JacD(i) + 1.d0
-    N(i,i+1) = scaling_const**2/12.d0*JacU(i)
-    N(i+1,i) = scaling_const**2/12.d0*JacL(i)
-
-    ! N_12 block
-    N(i,i+nlev)   = scaling_const/2.d0*JacD(i)
-    N(i,i+1+nlev) = scaling_const/2.d0*JacU(i)
-    N(i+1,i+nlev) = scaling_const/2.d0*JacL(i)
- 
-    ! N_21 block
-    N(i+nlev,i) = scaling_const/2.d0 
-
-    ! N_22 block
-    N(i+nlev,i+nlev)   = scaling_const**2/12.d0*JacD(i) + 1.d0
-    N(i+nlev,i+1+nlev) = scaling_const**2/12.d0*JacU(i)
-    N(i+1+nlev,i+nlev) = scaling_const**2/12.d0*JacL(i)
-  end do
-  N(nlev,nlev)     = scaling_const**2/12.d0*JacD(nlev)+1.d0
-  N(2*nlev,2*nlev) = scaling_const**2/12.d0*JacD(nlev)+1.d0
-  N(nlev,2*nlev)   = scaling_const/2.d0*JacD(nlev)
-  N(2*nlev,nlev)   = scaling_const/2.d0
-
-  ! form D(A) = I + 1/2 A + 1/12 A^2 (only differs from N(A) in sign on the
-  ! off-diagonal blocks)
-  D(1:nlev,1:nlev)               = N(1:nlev,1:nlev)
-  D(1:nlev,1+nlev:2*nlev)        = -N(1:nlev,1+nlev:2*nlev)
-  D(1+nlev:2*nlev,1:nlev)        = -N(1+nlev:2*nlev,1:nlev)
-  D(1+nlev:2*nlev,1+nlev:2*nlev) = N(1+nlev:2*nlev,1+nlev:2*nlev)
-
-  ! Invert matrix D
-  call get_DinvN_new(D,N,expJ,scaling_const*JacL,scaling_const*JacD,scaling_const*JacU,dcmplx(scaling_const))
-
-  ! Squaring
-  do i=1,k
-    expJ = matmul(expJ, expJ)
-  end do
-
-  ! multiply by wphi if necessary
-  if (present(wphi)) then
-    wphi = matmul(expJ, wphi)
-  end if
-
-  end subroutine matrix_exponential_new
-!===============================================================================
-
-
-!===============================================================================
-
-  subroutine get_DinvN(p, D, N, DinvN, Tri, alph, opt,dimJac)
-  real (kind=real_kind), dimension(:,:), intent(in) :: D, N, Tri
-  integer, intent(in) :: p, opt, dimJac
-  real (kind=real_kind), intent(out), target :: DinvN(dimJac,dimJac)
-  real (kind=real_kind), intent(in):: alph
- 
-  ! local variables
-  real (kind=real_kind) :: DinvN_LU(dimJac,dimJac)
-  complex(kind=8) :: sig1, sig2, sig1Inv, sig2Inv, kfac, alpha
-  integer :: block_dim, info, i
-  integer :: ipiv(dimJac)
-  complex(kind=8) :: work(dimJac), TriD(dimJac/2), TriL(dimJac/2 - 1), TriU(dimJac/2 - 1)
-  complex(kind=8) :: B(dimJac/2,dimJac), X1(dimJac/2,dimJac), X2(dimJac/2,dimJac), N1(dimJac/2,dimJac), N2(dimJac/2,dimJac)
-
-  alpha = dcmplx(alph)
-  block_dim = dimJac/2
-  ! Variables used to factor Pade approximation
-  kfac = (12.d0, 0.d0)
-  sig1 = dcmplx(3.d0,sqrt(3.d0))
-  sig2 = dcmplx(3.d0, (-sqrt(3.d0)))
-  sig1Inv = conjg(sig1)/(real(sig1)**2 + imag(sig1)**2)
-  sig2Inv = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
-
-  ! Invert matrix D
-  DinvN = 0.d0
- 
-  if (opt == 1) then  ! Calculate inverse using full LU decomp
-    DinvN = D
-    work = 0.d0
-    ipiv = 0
-    call DGETRF(dimJac, dimJac, DinvN, dimJac, ipiv, info)
-    call DGETRI(dimJac, DinvN, dimJac, ipiv, work, dimJac, info)
-
-!    DinvN_LU = matmul(DinvN, N)
-    DinvN = matmul(DinvN,N)
-  else  ! Use triangular solves and back substitution
-    if (p /= 2) then
-      stop 'Must have p = 2 approximation' ! Factoring done by hand - only for p=2
-    end if
-    X1 = 0.d0
-    N1 = 0.d0
-    N1 = dcmplx(N(1:block_dim, 1:dimJac))
-    N2 = 0.d0
-    N2 = dcmplx(N(block_dim+1:dimJac, 1:dimJac))
-! sig1I-Jac is not nice to invert. We left multiply by (I& 0\\ g*dt*sig1InvI& I) so
-! that we can solve the triangular system 
-! (-g^2sig1InvTri + sig1I)X2 = (gsig1InvN1+N2)  and back substitute to get
-! X1 = sig1Inv(N1+gTriX2)
-    do i = 1,block_dim-1
-      TriD(i) = dcmplx(Tri(i,i),0.d0)
-      TriL(i) = dcmplx(Tri(i+1,i),0.d0)
-      TriU(i) = dcmplx(Tri(i,i+1),0.d0)
-    end do
-   TriD(block_dim) = dcmplx(Tri(block_dim, block_dim), 0.d0)
-
-    ! solve for X1 and X2
-    TriD = TriD*(-sig1Inv)*alpha**2
-    TriL = TriL*(-sig1Inv)*alpha**2
-    TriU = TriU*(-sig1Inv)*alpha**2
- 
-    do i = 1,block_dim
-      TriD(i) = TriD(i) + sig1
-    end do
-
-    B = 0.d0
-    B = (kfac*(alpha*sig1Inv*N1 + N2))
-    call ZGTSV(block_dim, dimJac, TriL, TriD, TriU, B, block_dim, info)
-
-    X2 = B
-    X1 = sig1Inv * (kfac*N1 + alpha*matmul(Tri,X2))
-! Now do the second tridiag solve
-    N1 = X1
-    N2 = X2
-    do i = 1,block_dim-1  ! ZGTSV writes over Tri, so we have to get it again
-      TriD(i) = dcmplx(Tri(i,i),0.d0)
-      TriL(i) = dcmplx(Tri(i+1,i),0.d0)
-      TriU(i) = dcmplx(Tri(i,i+1),0.d0)
-    end do
-    TriD(block_dim) = dcmplx(Tri(block_dim, block_dim),0.d0)
-
-    ! solve for X1 and X2
-    TriD = TriD*(-sig2Inv)*alpha**2
-    TriL = TriL*(-sig2Inv)*alpha**2
-    TriU = TriU*(-sig2Inv)*alpha**2
- 
-    do i = 1,block_dim
-      TriD(i) = TriD(i) + sig2
-    end do
-
-    B = (alpha*sig2Inv*dcmplx(N1) + dcmplx(N2))
-
-    call ZGTSV(block_dim, dimJac, TriL, TriD, TriU, B, block_dim, info)
-    X2 = B
-
-    X1 = sig2Inv * (N1 + alpha*matmul(Tri,X2))
-    DinvN(1:block_dim, :) = real(X1)
-    DinvN(block_dim+1:dimJac, :) = real(X2)
-
-!    print *, "Difference is ", norm2(DinvN_LU - DinvN)
-!    stop
-  end if
-
-  end subroutine get_DinvN
-!===============================================================================
-
-  subroutine get_DinvN_new(D, N, DinvN, JacL,JacD,JacU,scaling_const)
-  real(kind=real_kind), intent(in)  :: D(2*nlev,2*nlev), N(2*nlev,2*nlev),&
-                                        JacL(nlev-1),JacD(nlev),JacU(nlev-1)
-  real(kind=real_kind), intent(out) :: DinvN(2*nlev,2*nlev)
-  complex(kind=8),      intent(in)  :: scaling_const
- 
-  ! local variables
-  complex(kind=8) :: sig1, sig2, sig1Inv, sig2Inv, pade_const
-  complex(kind=8) :: work(2*nlev), TriL(nlev-1), TriD(nlev), TriU(nlev-1),&
-                     Tri_prod(nlev,nlev), du2(nlev-2), N11(nlev,nlev),&
-                     N12(nlev,nlev),  N21(nlev,nlev),  N22(nlev,nlev),&
-                     X11(nlev,nlev),  X12(nlev,nlev),  X21(nlev,nlev),&
-                     X22(nlev,nlev)
-  integer         :: info, i, ipiv(2*nlev)
-
-  ! Constants for (2,2) Pade approximant
-  pade_const = (12.d0, 0.d0)
-  sig1       = dcmplx(3.d0,sqrt(3.d0))
-  sig2       = dcmplx(3.d0, (-sqrt(3.d0)))
-  sig1Inv    = conjg(sig1)/(real(sig1)**2 + imag(sig1)**2)
-  sig2Inv    = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
-
-! STEP 1:
-  ! solving the system
-  !    [fac1] [x11 x12] = pade_const*[nhat], where
-  !           [x21 x22]
-  !
-  ! fac1 = [sig i                -jac                 ]
-  !        [  0       sig i - scaling_const*siginv*jac], and
-  !
-  ! nhat = [              n11                                    n12             ]
-  !        [scaling_const*siginv*n11 + n21         scaling_const*siginv*n12 + n22]
-  
-  ! Blocks of N
-  N11 = dcmplx(N(1:nlev,1:nlev))
-  N12 = dcmplx(N(1:nlev,1+nlev:2*nlev))
-  N21 = dcmplx(N(1+nlev:2*nlev,1:nlev))
-  N22 = dcmplx(N(1+nlev:2*nlev,1+nlev:2*nlev))
-
-  ! Tridiagonal matrix: sig1*I - scaling_const*sig1Inv*Jac
-  TriD = dcmplx(JacD)*(-sig1Inv)*scaling_const + sig1
-  TriL = dcmplx(JacL)*(-sig1Inv)*scaling_const
-  TriU = dcmplx(JacU)*(-sig1Inv)*scaling_const
-
-  ! Tridiagonal solve to get X21, X22
-  call zgttrf(nlev,tril,trid,triu,du2,ipiv,info)                  ! LU decomposition
-  X21 = pade_const*(scaling_const*sig1Inv*N11 + N21)              ! Nhat_21 block
-  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X21,nlev,info)! Solve for X21
-  X22 = pade_const*(scaling_const*sig1Inv*N12 + N22)              ! Nhat_22 block
-  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X22,nlev,info)! Solve for X22
-  
-  ! solve for X11 and X12
-  call tri_mult(JacL,JacD,JacU,X21,Tri_prod,nlev)  ! Compute T*X21
-  X11 = sig1Inv * (pade_const*N11 + Tri_prod)      ! Compute X11
-  call tri_mult(JacL,JacD,JacU,X22,Tri_prod,nlev)  ! Compute T*X22
-  X12 = sig1Inv * (pade_const*N12 + Tri_prod)      ! Compute X12
- 
-! STEP 2:
-  ! solve the system
-  !    [fac2] [DinvN] = [Nhat], where
-  !
-  ! fac2 = [sig I                -Jac                 ]
-  !        [  0       sig I - scaling_const*sigInv*Jac], and
-  !
-  ! Nhat = [              X11                                    X12             ]
-  !        [scaling_const*sigInv*X11 + X21         scaling_const*sigInv*X12 + X22]
-  !   using the Xij from the previous solve.
-
-  ! Blocks of Nhat
-  N11 = X11
-  N12 = X12
-  N21 = X21
-  N22 = X22
-
-  ! Tridiagonal matrix T = sig2 I - scaling_const*sig2Inv*Jac
-  TriD = dcmplx(JacD)*(-sig2Inv)*scaling_const + sig2
-  TriL = dcmplx(JacL)*(-sig2Inv)*scaling_const
-  TriU = dcmplx(JacU)*(-sig2Inv)*scaling_const
-
-  ! Tridiagonal solve to get X21, X22
-  call zgttrf(nlev,TriL,TriD,TriU,du2,ipiv,info)                   ! LU decomposition
-  X21 = scaling_const*(sig2Inv)*N11+N21                            ! Nhat_21 block
-  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X21,nlev,info) ! Get X21
-  X22 = scaling_const*(sig2Inv)*N12+N22                            ! Nhat_22 block
-  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X22,nlev,info) ! Get X22
-
-  ! Back substitution for X11, X12
-  call tri_mult(JacL,JacD,JacU,X21,Tri_prod,nlev)  ! Compute T*X21
-  X11 = sig2Inv * (N11 + Tri_prod)                 ! Compute X11
-  call tri_mult(JacL,JacD,JacU,X22,Tri_prod,nlev)  ! Compute T*X22
-  X12 = sig2Inv * (N12 + Tri_prod)                 ! Compute X12
-
-  ! return DinvN
-  DinvN(1:nlev,1:nlev)               = X11
-  DinvN(1:nlev,nlev+1:2*nlev)        = X12
-  DinvN(1+nlev:2*nlev,1:nlev)        = X21
-  DinvN(1+nlev:2*nlev,1+nlev:2*nlev) = X22
-
-  end subroutine get_DinvN_new
-!===========================================================================================================
-  subroutine linear_combination_of_elem(t3,a1,t1,a2,t2,elem,nets,nete)
-  !===================================================================================
-  ! this subroutine calculates the linear combination a1*elem(t1) + a2*elem(t2)
-  ! and stores it in elem(t3)
-  !
-  ! calculated, and returned as w.
-  !===================================================================================
-
-  real (kind=real_kind), intent(in)       :: a1,a2
-  integer, intent(in)                     :: t1,t2,t3,nets,nete
-  type (element_t), intent(inout), target :: elem(:) 
-
-  ! Local variables
-  integer :: ie
-
-  do ie = nets, nete
-    elem(ie)%state%dp3d(:,:,:,t3)         = elem(ie)%state%dp3d(:,:,:,t1) * a1         + elem(ie)%state%dp3d(:,:,:,t2) * a2
-    elem(ie)%state%w_i(:,:,1:nlevp,t3)     = elem(ie)%state%w_i(:,:,1:nlevp,t1) * a1     + elem(ie)%state%w_i(:,:,1:nlevp,t2) * a2
-    elem(ie)%state%phinh_i(:,:,1:nlev,t3) = elem(ie)%state%phinh_i(:,:,1:nlev,t1) * a1 + elem(ie)%state%phinh_i(:,:,1:nlev,t2) * a2
-    elem(ie)%state%vtheta_dp(:,:,:,t3)    = elem(ie)%state%vtheta_dp(:,:,:,t1) * a1    + elem(ie)%state%vtheta_dp(:,:,:,t2) * a2
-    elem(ie)%state%v(:,:,:,:,t3)          = elem(ie)%state%v(:,:,:,:,t1) * a1          + elem(ie)%state%v(:,:,:,:,t2) * a2       
-  end do
-
-  end subroutine linear_combination_of_elem
-!=============================================================================================
-  subroutine expLdtwphi(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
-  real (kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),JacU_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1)
-  type (element_t), intent(inout), target :: elem(:)
-  integer, intent(in) :: n0,nets,nete
-  real (kind=real_kind), intent(in) :: dt
-
-  ! Local variables
-  integer :: ie,i,j
-  real (kind=real_kind) :: wphivec(2*nlev),wphivec2(2*nlev)
-  real (kind=real_kind) :: expJ(2*nlev,2*nlev),expJ2(2*nlev,2*nlev)
-
-
-  do ie = nets, nete
-    do i = 1,np
-      do j = 1,np
-        wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-        wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-!        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,expJ2,wphivec2) ! Pade approximation
-        call matrix_exponential_new(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),dt,expJ,wphivec)
-!        if (norm2(expJ-expJ2)<1e-10) then
-!          print *, "matrix exponential works!"
-!          print *, "Error = ", norm2(expJ-expJ2)
-!          stop
-!        else
-!          print *, "Error: problem with matrix exponential."
-!          print *, "Error = ", norm2(expJ-expJ2)
-!          stop
-!        end if
-        elem(ie)%state%w_i(i,j,1:nlev,n0) = wphivec(1:nlev)
-        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = wphivec(1+nlev:2*nlev)
-      end do
-    end do
-  end do
-
-  end subroutine expLdtwphi
-  subroutine matrix_exponential2(JacL, JacD, JacU, dimDiag, dt, expJ, w)
-  !===================================================================================
-  ! Using a Taylor approximation,
-  ! this subroutine calculates the matrix exponential of the matrix of the form
-  !    [ 0       g*dt*T
-  !      g*dt*I       0 ],
-  ! where the tridiagonal matrix T is given by the input vectors JacL, JacD, and JacU
-  !
-  ! This matrix exponential is returned as expJ. The product (e^J)*w is also
-  ! calculated, and returned as w.
-  !===================================================================================
-
-  real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
-  integer, intent(in) :: dimDiag
-  real (kind=real_kind), intent(in) :: dt
-  real (kind=real_kind), intent(out) :: expJ(2*dimDiag, 2*dimDiag)
-  real (kind=real_kind), dimension(:), intent(inout), optional :: w 
-  ! local variables
-  real (kind=real_kind) :: Aj(2*dimDiag,2*dimDiag), Jac(2*dimDiag,2*dimDiag)
-  real (kind=real_kind) :: work(2*dimDiag)
-  integer :: ipiv(2*dimDiag)
-  real (kind=real_kind) normJ, pfac, fac, alpha
-  integer i,j,p,info, maxiter, k, dimJac 
-
-  p = 10  ! number of terms in the series
-  ! Initialize random A and normalize
-  dimJac = 2*dimDiag
-  Jac = 0.d0
-  do i = 1,(dimDiag-1)
-    Jac(i,(i+dimDiag)) = JacD(i)
-    Jac(i,(i+1+dimDiag)) = JacU(i)
-    Jac((i+1),(i+dimDiag)) = JacL(i) 
-  end do
-  Jac(dimDiag, dimJac) = JacD(dimDiag)
-  do i = 1,dimDiag
-    Jac(i + dimDiag,i) = 1.d0
-  end do
-  Jac = Jac * g * dt
-
-  ! Initialize Aj,negAj = identity and N,D = 0.
-  Aj = 0.d0
-  expJ = 0.d0
-
-  do i = 1,dimJac
-    Aj(i,i) = 1.d0
-  enddo ! end do loop
-
-  ! series for approximation
-  do i=0,p
-    expJ = expJ + 1/gamma(dble(i+1.d0))*Aj
-    Aj = matmul(Aj,Jac)
-  enddo ! end do loop for Pade approx
-
-  if (present(w)) then
-    w = matmul(expJ, w)
-  end if
-
-  end subroutine matrix_exponential2
-!------------------------------------------------------------------------------
-subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
-  real (kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),JacU_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1)
-  type (element_t), intent(inout), target :: elem(:)
-  integer, intent(in) :: n0,nets,nete
-  real (kind=real_kind), intent(in) :: dt
-
-  ! Local variables
-  integer :: ie,i,j,info,k
-  real (kind=real_kind) :: wphivec(2*nlev)
-  real (kind=real_kind) :: expJ(2*nlev,2*nlev),Jac(2*nlev,2*nlev),iden(2*nlev,2*nlev) 
-  real (kind=real_kind) :: work(2*nlev)
-  integer :: ipiv(2*nlev)
-
-  iden = 0.d0
-  do i = 1,2*nlev
-    iden(i,i) = 1.d0 
-  end do
-
-  do ie = nets, nete
-    do i = 1,np
-      do j = 1,np
-        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,expJ)
-        expJ = expJ - iden
-
-        Jac = 0.d0
-        do k = 1,nlev-1
-          Jac(k,k+nlev) = JacD_elem(k,i,j,ie)
-          Jac(k+1,k+nlev) = JacL_elem(k,i,j,ie)
-          Jac(k,k+nlev+1) = JacU_elem(k,i,j,ie)
-
-          Jac(k+nlev,k) = 1.d0
-        end do
-        Jac(nlev,2*nlev) = JacD_elem(nlev,i,j,ie)
-        Jac(2*nlev,nlev) = 1.d0
-        Jac = Jac * g
-
-        work = 0.d0
-        ipiv = 0
-        call DGETRF(2*nlev, 2*nlev, Jac, 2*nlev, ipiv, info)
-        if (info .ne. 0) then
-          print *, "error 1!"
-        end if
-        call DGETRI(2*nlev, Jac, 2*nlev, ipiv, work, 2*nlev, info)
-        if (info .ne. 0) then
-          print *, "error 2!"
-        end if
-        expJ = matmul(Jac, expJ)
-       
-        wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-        wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        wphivec = matmul(expJ,wphivec)
-       
-        elem(ie)%state%w_i(i,j,1:nlev,n0) = wphivec(1:nlev)
-        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = wphivec(1+nlev:2*nlev)
-
-      end do
-    end do
-  end do
-
-  end subroutine phi1Ldt
-
-
-!=========================================================================
-! Stores elem(np1) in mdarray "stage"
-!=========================================================================
-  subroutine store_state(elem,np1,nets,nete,stage)
-  
-  type(element_t), intent(in) :: elem(:)
-  integer, intent(in) :: np1, nets, nete
-  real (kind=real_kind), intent(out) :: stage(nete-nets+1,np,np,nlevp,6)
-
-  ! local variables
-  integer :: ie
-  do ie = nets, nete
-    stage(ie,:,:,1:nlev,1) = elem(ie)%state%v(:,:,1,:,np1)
-    stage(ie,:,:,1:nlev,2) = elem(ie)%state%v(:,:,2,:,np1)
-    stage(ie,:,:,:,3)      = elem(ie)%state%w_i(:,:,:,np1)
-    stage(ie,:,:,:,4)      = elem(ie)%state%phinh_i(:,:,:,np1)
-    stage(ie,:,:,1:nlev,5) = elem(ie)%state%vtheta_dp(:,:,:,np1)
-    stage(ie,:,:,1:nlev,6) = elem(ie)%state%dp3d(:,:,:,np1)
-  end do
-
-  end subroutine store_state
-
-
-
-!==========================================================================
-! Retrieves mdarray "stage" and stores at elem(nm1)
-!==========================================================================
-  subroutine retrieve_state(stage,elem,nm1,nets,nete)
-  
-  real (kind=real_kind), intent(in) :: stage(nete-nets+1,np,np,nlevp,6)
-  type(element_t), intent(inout)    :: elem(:)
-  integer, intent(in)               :: nm1,nets,nete
-
-  ! local variables
-  integer :: ie
-
-  do ie = nets,nete
-    elem(ie)%state%v(:,:,1,:,nm1)       = stage(ie,:,:,1:nlev,1)
-    elem(ie)%state%v(:,:,2,:,nm1)       = stage(ie,:,:,1:nlev,2)
-    elem(ie)%state%w_i(:,:,:,nm1)       = stage(ie,:,:,:,3)
-    elem(ie)%state%phinh_i(:,:,:,nm1)   = stage(ie,:,:,:,4)
-    elem(ie)%state%vtheta_dp(:,:,:,nm1) = stage(ie,:,:,1:nlev,5)
-    elem(ie)%state%dp3d(:,:,:,nm1)      = stage(ie,:,:,1:nlev,6)
-  end do
-
-  end subroutine retrieve_state
-
-
-!============================================================================
-! This subroutine calculates the phi function phi_k(Ldt) and applies it
-! to the state variables located in elem(n0).
-!============================================================================
-  subroutine apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,deg,n0,elem,nets,nete)
-
-  real(kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),&
-       JacD_elem(nlev,np,np,nete-nets+1),JacU_elem(nlev-1,np,np,nete-nets+1),dt
-  integer, intent(in)               :: deg,n0,nets,nete
-  type(element_t), intent(inout)    :: elem(:)
-
-  ! local variables
-  real(kind=real_kind)  :: Jac(2*nlev,2*nlev),JInv(2*nlev,2*nlev),expJ(2*nlev,2*nlev),&
-      wphivec(2*nlev),c(2*nlev), phi_k(2*nlev)
-  integer               :: i,j,k,ie,info
-  integer               :: ipiv(nlev)
-  complex(kind=8)       :: work(nlev)
-  
-  do ie = nets, nete
-    do i = 1,np
-      do j = 1,np
-        wphivec(1:nlev)        = elem(ie)%state%w_i(i,j,1:nlev,n0)
-        wphivec(nlev+1:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        call phi_func(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),dt,deg,wphivec,phi_k)
-        ! update w and phi
-        elem(ie)%state%w_i(i,j,1:nlev,n0)     = phi_k(1:nlev)
-        elem(ie)%state%phinh_i(i,j,1:nlev,n0) = phi_k(nlev+1:2*nlev)
-      end do
-    end do
-    if (deg .gt. 1) then ! update other variables
-      elem(ie)%state%v(:,:,1,:,n0)       = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%v(:,:,1,:,n0)
-      elem(ie)%state%v(:,:,2,:,n0)       = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%v(:,:,2,:,n0)
-      elem(ie)%state%vtheta_dp(:,:,:,n0) = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%vtheta_dp(:,:,:,n0)
-      elem(ie)%state%dp3d(:,:,:,n0)      = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%dp3d(:,:,:,n0)
-    end if
-  end do
-  end subroutine apply_phi_func
-
-!============================================================================
-! This subroutine calculates the phi function phi_k(Ldt) and applies it
-! to a vector c.
-!============================================================================
-  subroutine phi_func(JacL,JacD,JacU,dt,deg,wphivec,phi_k)
-
-  real(kind=real_kind), intent(in)  :: JacL(nlev-1),&
-       JacD(nlev),JacU(nlev-1),dt,wphivec(2*nlev)
-  real(kind=real_kind), intent(out) :: phi_k(2*nlev)
-  integer, intent(in)               :: deg
-
-  ! local variables
-  real(kind=real_kind)  :: Jac(2*nlev,2*nlev),JInv(2*nlev,2*nlev),expJ(2*nlev,2*nlev),&
-      c(2*nlev),c_1(nlev),c_2(nlev),phi_k2(2*nlev),du2(nlev-2),eye(nlev,nlev)
-  real(kind=real_kind)  :: Lcopy(nlev-1), Dcopy(nlev), Ucopy(nlev-1)
-  integer               :: k,info
-  integer               :: ipiv(nlev)
-  complex(kind=8)       :: work(2*nlev)
-  
-  Lcopy = JacL
-  Dcopy = JacD
-  Ucopy = JacU
-!  call formJac(JacL,JacD,JacU,dt,Jac)
-  ! Calculate Jac^(-1) for later
-!  JInv = Jac
-  work = 0.d0
-  ipiv = 0
-!  call DGETRF(2*nlev, 2*nlev, JInv, 2*nlev, ipiv, info)
-!  call DGETRI(2*nlev, JInv, 2*nlev, ipiv, work, 2*nlev, info)
-
-  c = wphivec
-!  call matrix_exponential(JacL,JacD,JacU,nlev,dt,expJ,c)
-  call matrix_exponential_new(JacL,JacD,JacU,dt,expJ,c)
-  c = c - wphivec
-  c_1 = c(1:nlev)
-  c_2 = c(nlev+1:2*nlev)
-  phi_k = 0.d0
-  phi_k(1:nlev) = c_2
-
-  call DGTTRF(nlev,Lcopy,Dcopy,Ucopy,du2,ipiv,info)
-  call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
-
-  phi_k(nlev+1:2*nlev) = c_1
-  phi_k = phi_k/(g*dt)
-
-!  phi_k = matmul(JInv,c) 
-!  print *, "Error of phi1: ", norm2(phi_k - phi_k2)
-!  stop
-!  if (norm2(phi_k-phi_k2)>1e-10) then
-!    print *, "Error: check accuracy of phi function"
-!    print *, "Error = ", norm2(phi_k-phi_k2)
-!    stop
-!  end if
-
-
-  ! calculate phi_k recursively
-  if (deg .ge. 2) then
-    do k = 2,deg
-      phi_k = phi_k - 1/gamma(dble(k))*wphivec
-      c_1 = phi_k(1:nlev)
-      c_2 = phi_k(nlev+1:2*nlev)
-      call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
-!      phi_k = matmul(JInv,phi_k)
-      phi_k(1:nlev) = c_2/(g*dt)
-      phi_k(nlev+1:2*nlev) = c_1/(g*dt)
-!      if (norm2(phi_k-phi_k2)>1e-10) then
-!        print *, "Error of phi2 is ", norm2(phi_k2-phi_k)
-!        stop
-!      end if
-    end do
-  end if
-  end subroutine phi_func
-
-!============================================================================
-! This subroutine calculates the phi function phi_k(Ldt) and applies it
-! to a vector c.
-!============================================================================
-  subroutine phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,phi_deg,phi_func,elem,n0,nets,nete)
-
-  real(kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),&
-                                       JacD_elem(nlev,np,np,nete-nets+1),&
-                                       JacU_elem(nlev-1,np,np,nete-nets+1),dt
-  real(kind=real_kind), intent(out) :: phi_func(np,np,2*nlev,nete-nets+1,3)
-  integer, intent(in)               :: phi_deg,nets,nete,n0
-  type(element_t), intent(in)    :: elem(:)
- 
-
-  ! local variables
-  real(kind=real_kind)  :: expJ(2*nlev,2*nlev), c(2*nlev),c_1(nlev),c_2(nlev),du2(nlev-2)
-  real(kind=real_kind)  :: Lcopy(nlev-1), Dcopy(nlev),Ucopy(nlev-1),wphivec(2*nlev)
-  integer               :: k,info,ie,i,j
-  integer               :: ipiv(nlev)
-  complex(kind=8)       :: work(2*nlev)
-  phi_func = 0.d0
-  
-  do ie = nets,nete
-    do i = 1,np
-      do j = 1,np
-        Lcopy = JacL_elem(:,i,j,ie)
-        Dcopy = JacD_elem(:,i,j,ie)
-        Ucopy = JacU_elem(:,i,j,ie)
-        work = 0.d0
-        ipiv = 0
-
-        wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-        wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-        c = wphivec
-        call matrix_exponential_new(Lcopy,Dcopy,Ucopy,dt,expJ,c)
-        c = c - wphivec
-        c_1 = c(1:nlev)
-        c_2 = c(nlev+1:2*nlev)
-        phi_func(i,j,1:nlev,ie,1) = c_2
-
-        call DGTTRF(nlev,Lcopy,Dcopy,Ucopy,du2,ipiv,info)
-        call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
-
-        phi_func(i,j,nlev+1:2*nlev,ie,1) = c_1
-        phi_func(i,j,:,ie,1) = phi_func(i,j,:,ie,1)/(g*dt)
-
-        ! calculate phi_k recursively
-        if (phi_deg .ge. 2) then
-          do k = 2,phi_deg
-            phi_func(i,j,:,ie,k) = phi_func(i,j,:,ie,k-1) - 1/gamma(dble(k))*wphivec
-            c_1 = phi_func(i,j,1:nlev,ie,k)
-            c_2 = phi_func(i,j,nlev+1:2*nlev,ie,k)
-            call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
-            phi_func(i,j,1:nlev,ie,k) = c_2/(g*dt)
-            phi_func(i,j,nlev+1:2*nlev,ie,k) = c_1/(g*dt)
-          end do
-        end if
-      end do
-    end do
-  end do
-  end subroutine phi_func_new
-
-!============================================================================
-! This subroutine calculates the phi function phi_k(Ldt) and applies it
-! to the state variables located in elem(n0).
-!============================================================================
-  subroutine apply_phi_func_new(phi_func,struct_dim,deg,elem,n0,nets,nete)
-
-  integer, intent(in)               :: deg,n0,nets,nete,struct_dim
-  type(element_t), intent(inout)    :: elem(:)
-  real (kind=real_kind), intent(in) :: phi_func(np,np,2*nlev,nete-nets+1,3)
-
-  ! local variables
-  integer :: ie
-  
-  do ie = nets, nete
-        elem(ie)%state%w_i(:,:,1:nlev,n0)     = phi_func(:,:,1:nlev,ie,deg)
-        elem(ie)%state%phinh_i(:,:,1:nlev,n0) = phi_func(:,:,nlev+1:2*nlev,ie,deg)
-    if (deg .gt. 1) then ! update other variables
-      elem(ie)%state%v(:,:,1,:,n0)       = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%v(:,:,1,:,n0)
-      elem(ie)%state%v(:,:,2,:,n0)       = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%v(:,:,2,:,n0)
-      elem(ie)%state%vtheta_dp(:,:,:,n0) = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%vtheta_dp(:,:,:,n0)
-      elem(ie)%state%dp3d(:,:,:,n0)      = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%dp3d(:,:,:,n0)
-    end if
-  end do
-  end subroutine apply_phi_func_new
-
-!=================================================================================================
-! Subroutine getLu calculates the Jacobian L_m and multiplies it by u_m. The
-! product is stored and returned in the vector Lu 
-!=================================================================================================
-  subroutine getLu(JacL_elem,JacD_elem,JacU_elem,elem,n0,nets,nete,Lu)
-  real (kind=real_kind), intent(in)  :: JacL_elem(nlev-1,np,np,nete-nets+1),&
-       JacU_elem(nlev-1,np,np,nete-nets+1),JacD_elem(nlev,np,np,nete-nets+1)
-  type (element_t), intent(in) :: elem(:)
-  integer, intent(in) :: n0,nets,nete
-  real (kind=real_kind), intent(out) :: Lu(np,np,2*nlev,nete-nets+1)
-
-  ! Local variables
-  integer :: ie,i,j,k
-! real (kind=real_kind) :: Jac(2*nlev,2*nlev) 
-! real (kind=real_kind) :: Lu_matmul(np,np,2*nlev,nete-nets+1) ! for unit test
-
-! do ie = nets,nete
-!   do i = 1,np
-!     do j = 1,np
-!       call formJac(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),1.d0,Jac)
-!       Lu_matmul(i,j,1:nlev,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-!       Lu_matmul(i,j,1+nlev:2*nlev,ie) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
-!       Lu_matmul(i,j,:,ie) = matmul(Jac,Lu_matmul(i,j,:,ie))
-!     end do
-!   end do
-! end do
-
-  do ie = nets,nete
-    do i = 1,np
-      do j = 1,np
-        ! [0 g*tri \\ g*I 0][w \\ phi] = g*[tri*phi \\ w]
-        Lu(i,j,1+nlev:2*nlev,ie) = elem(ie)%state%w_i(i,j,1:nlev,n0)
-        ! first component
-        Lu(i,j,1,ie) = JacD_elem(1,i,j,ie)*elem(ie)%state%phinh_i(i,j,1,n0)&
-          + JacU_elem(1,i,j,ie)*elem(ie)%state%phinh_i(i,j,2,n0)
-        ! last component 
-        Lu(i,j,nlev,ie) = JacL_elem(nlev-1,i,j,ie)*elem(ie)%state%phinh_i(i,j,nlev-1,n0)&
-          +JacD_elem(nlev,i,j,ie)*elem(ie)%state%phinh_i(i,j,nlev,n0)
-        ! inner components
-        Lu(i,j,2:nlev-1,ie) = JacL_elem(1:nlev-2,i,j,ie)*elem(ie)%state%phinh_i(i,j,1:nlev-2,n0)&
-           + JacD_elem(2:nlev-1,i,j,ie)*elem(ie)%state%phinh_i(i,j,2:nlev-1,n0)&
-           + JacU_elem(2:nlev-1,i,j,ie)*elem(ie)%state%phinh_i(i,j,3:nlev,n0)
-          Lu(i,j,:,ie) = g*Lu(i,j,:,ie)
-      end do
-    end do
-  end do
-
-! print *, "Difference between matmul and entry manipulation:", norm2(Lu_matmul - Lu)
-  end subroutine getLu
-!===================================================================
-! The subroutine add_Lu updates the state variables  
-!   by adding Lu to w and phi
-! 
-!=====================================================================
-  subroutine add_Lu(elem,n0,Lu,nets,nete)
-  type(element_t), intent(inout)   :: elem(:)
-  real(kind=real_kind), intent(in) :: Lu(np,np,2*nlev,nete-nets+1)
-  integer, intent(in)              :: nets,nete,n0
-  ! local variables
-  integer :: ie
- 
-  ! update w and phi with the action of phi_func
-  do ie = nets,nete 
-    elem(ie)%state%w_i(:,:,1:nlev,n0)     = elem(ie)%state%w_i(:,:,1:nlev,n0) + Lu(:,:,1:nlev,ie)
-    elem(ie)%state%phinh_i(:,:,1:nlev,n0) = elem(ie)%state%phinh_i(:,:,1:nlev,n0) + Lu(:,:,nlev+1:2*nlev,ie)
-  end do
-  end subroutine add_Lu
-!=================================================================================================
-
-!=============================================================================
-! formJac forms the actual matrix of the Jacobian
-! Inputs: vectors for the lower, main, and upper diagonals; dt
-! Outputs: Jac
-!=============================================================================
-  subroutine formJac(JacL,JacD,JacU,dt,Jac)
-  real(kind=real_kind), intent(in)  :: JacL(nlev-1),JacD(nlev),JacU(nlev-1),dt
-  real(kind=real_kind), intent(out) :: Jac(2*nlev,2*nlev)
-  ! local variables
-  integer :: k,dimJac
-
-  ! Form Jacobian
-  dimJac = 2*nlev
-  Jac = 0.d0
-  do k = 1,(nlev-1)
-    Jac(k,(k+nlev))     = JacD(k)
-    Jac(k,(k+1+nlev))   = JacU(k)
-    Jac((k+1),(k+nlev)) = JacL(k)
-  end do
-  Jac(nlev, dimJac)     = JacD(nlev)
-  do k = 1,nlev
-    Jac(k + nlev,k) = 1.d0
-  end do
-  Jac = Jac * g * dt
-  end subroutine formJac
-!==============================================================================
-  subroutine tri_mult(JacL,JacD,JacU,mat,prod,nrhs)
-  real(kind=real_kind),intent(in) :: JacL(nlev-1),JacD(nlev),JacU(nlev-1)
-  complex(kind=8),intent(in) :: mat(nlev,nrhs)
-  complex(kind=8),intent(out) :: prod(nlev,nrhs)
-  integer :: nrhs
-
- ! local variables
-  integer :: j
-  do j=1,nrhs ! loop over columns
-    prod(1,j)        = JacD(1)*mat(1,j) + JacU(1)*mat(2,j)
-    prod(2:nlev-1,j) = JacD(2:nlev-1)*mat(2:nlev-1,j)&
-                     + JacL(1:nlev-2)*mat(1:nlev-2,j) + JacU(2:nlev-1)*mat(3:nlev,j)
-    prod(nlev,j)     = JacL(nlev-1)*mat(nlev-1,j)+JacD(nlev)*mat(nlev,j)
-  end do
-
-  end subroutine
-
-!==============================================================================
-  subroutine tri_inv(JacL,JacD,JacU,inv)
-  real(kind=real_kind),intent(in)  :: JacL(nlev-1),JacD(nlev),JacU(nlev-1)
-  real(kind=real_kind),intent(out) :: inv(nlev,nlev)
-  ! local variables
-  integer :: i, j
-  real(kind=real_kind) :: theta(0:nlev),phi(nlev+1),cprod,bprod
-
-  ! initial conditions
-  theta(0)    = 1.d0
-  theta(1)    = JacD(1)
-  phi(nlev+1) = 1.d0
-  phi(nlev)   = JacD(nlev)
-  ! recurrence relation
-  ! theta(i) = JacD(i)theta(i-1)-JacU(i-1)JacL(i-1)*theta(i-2), i = 2...n
-  ! phi(i)   = JacD(i)phi(i+1)-JacU(i)JacL(i)phi(i+2) for i = n-1 ... 1
-  do i = 2,nlev
-    theta(i) = JacD(i)*theta(i-1)-JacU(i-1)*JacL(i-1)*theta(i-2)
-    phi(nlev-i+1) = JacD(nlev-i+1)*phi(nlev-i+2)&
-                  - JacU(nlev-i+1)*JacL(nlev-i+1)*phi(nlev-i+3)
-  end do
-
-  ! form inverse:
-  !if i<j: inv(i,j)=(-1)^(i+j)JacU(i)...JacU(j-1)theta(i-1)phi(j+1)/theta(nlev)
-  !if i=j: inv(i,j)=theta(i-1)*phi(j+1)/theta(nlev)
-  !if i>j: inv(i,j)=(-1)^(i+j)JacL(j)...JacL(i-1)theta(j-1)phi(i+1)/theta(nlev)
-
-  ! first row:
-  inv(1,1) = phi(2)
-  bprod = -JacU(1)
-  do j = 2,nlev-1
-    inv(1,j) = bprod*phi(j+1)
-    bprod = -bprod*JacU(j)
-  end do
-  inv(1,nlev) = bprod*phi(nlev+1)
-  ! interior rows:
-  do i = 2,nlev-1
-    bprod = -JacU(i)
-    cprod = (-1.d0)**(i+1)*product(JacL(1:i-1))
-    do j = 1,i-1
-      inv(i,j) = cprod*theta(j-1)*phi(i+1)
-      cprod = -cprod/JacL(j)
-    end do
-    inv(i,i) = theta(i-1)*phi(j+1)
-    do j = i+1,nlev-1
-      inv(i,j) = bprod*theta(i-1)*phi(j+1)
-      bprod = -bprod * JacU(j)
-    end do
-    inv(i,nlev) = bprod*theta(i-1)*phi(nlev+1)
-  end do
-  ! last row:
-  cprod = -product(JacL(1:nlev-1))
-  do j = 1,nlev-1
-    inv(nlev,j) = cprod*theta(j-1)
-    cprod = -cprod/JacL(j)
-  end do
-  inv(nlev,nlev) = theta(nlev-1)
-
-  inv = inv/theta(nlev)
-
-  end subroutine tri_inv
-!==============================================================================
 end module prim_advance_mod

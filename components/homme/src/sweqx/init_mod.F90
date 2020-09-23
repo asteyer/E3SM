@@ -37,7 +37,7 @@ contains
         set_area_correction_map2
 
     ! --------------------------------
-    use edge_mod, only : initedgebuffer
+    use edge_mod, only : initedgebuffer, edge_g
     use edgetype_mod, only : EdgeDescriptor_t, edgebuffer_t
     ! --------------------------------
     use reduction_mod, only : reductionbuffer_ordered_1d_t, red_min, red_flops, red_timer, &
@@ -81,6 +81,8 @@ contains
     use physical_constants, only : dd_pi
     ! -------------------------------
     use coordinate_systems_mod, only : sphere_tri_area
+    ! --------------------------------
+    use common_io_mod, only : homme_pio_init
     ! --------------------------------
 
 
@@ -133,6 +135,7 @@ contains
     call t_startf('init')
 
     call readnl(par)
+    call homme_pio_init(par%rank,par%comm)
 
     if (par%masterproc) then
 
@@ -338,6 +341,7 @@ contains
     ! =================================================================
     ! Initialize shared boundary_exchange and reduction buffers
     ! =================================================================
+    call initEdgeBuffer(par,edge_g,elem,max(2,nlev))
     call initEdgeBuffer(par,edge1,elem,nlev)
     call initEdgeBuffer(par,edge2,elem,2*nlev)
     call initEdgeBuffer(par,edge3,elem,11*nlev)

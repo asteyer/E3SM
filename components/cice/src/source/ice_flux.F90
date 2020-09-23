@@ -29,6 +29,8 @@
       use ice_blocks
       use ice_domain_size
       use ice_constants
+      use ice_state, only: aice, vice
+
 !
 !EOP
 !
@@ -661,7 +663,6 @@
 !
 !EOP
 !
-      use ice_state, only: aice, vice
 
       fsurf  (:,:,:) = c0
       fcondtop(:,:,:)= c0
@@ -940,7 +941,9 @@
       ! Merge fluxes
       !-----------------------------------------------------------------
 
+#ifdef CPRCRAY
 !DIR$ CONCURRENT !Cray
+#endif
 !cdir nodep      !NEC
 !ocl novrec      !Fujitsu
       do ij = 1, icells
@@ -1092,7 +1095,9 @@
           i, j    ! horizontal indices
 
 
+#ifdef CPRCRAY
 !DIR$ CONCURRENT !Cray
+#endif
 !cdir nodep      !NEC
 !ocl novrec      !Fujitsu
       do j = 1, ny_block
