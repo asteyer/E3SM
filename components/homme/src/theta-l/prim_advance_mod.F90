@@ -3988,7 +3988,7 @@ contains
            elem(ie)%accum%S2(:,:)=-elem(ie)%accum%T2(:,:)      
         endif
 
-        if (scale3.ne.0d0) the
+        if (scale3.ne.0d0) then
           ! check w b.c.
           temp(:,:,1) =  (elem(ie)%state%v(:,:,1,nlev,np1)*elem(ie)%derived%gradphis(:,:,1) + &
              elem(ie)%state%v(:,:,2,nlev,np1)*elem(ie)%derived%gradphis(:,:,2))/g
