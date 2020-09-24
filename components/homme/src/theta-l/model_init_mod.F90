@@ -26,8 +26,11 @@ module model_init_mod
   use time_mod,           only: timelevel_qdp, timelevel_t
   use physical_constants, only: g, TREF, Rgas, kappa
   use imex_mod,           only: test_imex_jacobian
-  use eos,                only: phi_from_eos
- 
+  use eos,                only: phi_from_eos,pnh_and_exner_from_eos
+  use exp_mod,            only: matrix_exponential,matrix_exponential2,phi_func,getLu,&
+                                formJac,tri_inv,tri_mult,phi_func_new,apply_phi_func,&
+                                apply_phi_func_new,store_state,linear_combination_of_elem,&
+                                get_exp_jacobian 
   implicit none
   
 contains
@@ -169,6 +172,9 @@ contains
        write(iulog,*) "  nlev_tom ",nlev_tom
     end if
 
+  end subroutine
+
+
   subroutine test_phifunc(hybrid)
   ! the following code tests the phi functions
   type(hybrid_t), intent(in) :: hybrid
@@ -294,7 +300,8 @@ contains
     phis(:,:)          = elem(ie)%state%phis(:,:)
     call TimeLevel_Qdp(tl, qsplit, qn0)
     call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,&
-            pnh,exner,dpnh_dp_i,pnh_i_out=pnh_i) ! not sure if we need this
+            pnh,exner,dpnh_dp_i,pnh_i,'model_init_mod') 
+
     call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_i,pnh,1)
     JacL_elem(:,:,:,ie) = JacL
     JacD_elem(:,:,:,ie) = JacD
@@ -363,7 +370,7 @@ contains
     phis(:,:)          = elem(ie)%state%phis(:,:)
     call TimeLevel_Qdp(tl, qsplit, qn0)
     call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,&
-            pnh,exner,dpnh_dp_i,pnh_i_out=pnh_i) ! not sure if we need this
+            pnh,exner,dpnh_dp_i,pnh_i,'model_init_mod') ! not sure if we need this
     call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_i,pnh,1)
     JacL_elem(:,:,:,ie) = JacL
     JacD_elem(:,:,:,ie) = JacD
@@ -435,7 +442,7 @@ contains
     phis(:,:)          = elem(ie)%state%phis(:,:)
     call TimeLevel_Qdp(tl, qsplit, qn0)
     call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,&
-            pnh,exner,dpnh_dp_i,pnh_i_out=pnh_i) ! not sure if we need this
+            pnh,exner,dpnh_dp_i,pnh_i,'model_init_mod') ! not sure if we need this
     call get_exp_jacobian(JacL,JacD,JacU,dp3d,phi_i,pnh,1)
     JacL_elem(:,:,:,ie) = JacL
     JacD_elem(:,:,:,ie) = JacD
@@ -484,4 +491,114 @@ contains
   call linear_combination_of_elem(tl%n0,1.d0,tl%nm1,0.d0,tl%n0,elem,nets,nete)
  
   end subroutine test_new_phi_func
+
+  subroutine test_matrix_exponential_accuracy(hybrid)
+
+  type(hybrid_t)    , intent(in) :: hybrid
+
+  ! local                                                                                                                                                    
+  real (kind=real_kind) :: approxexpJac(40,40), iden(40,40)
+  complex(kind=8) :: factor(40,40), factorInv(40,40), exactExp(40,40), A(40,40), garbage(40,40), Acopy(40,40)
+  complex(kind=8) :: work(40), D(40), work2(100)
+  real (kind=real_kind) :: JacL(19), JacU(19), JacD(20), rwork(80)
+  integer, dimension(40) :: ipiv
+  real (kind = real_kind) :: error
+  integer :: n, info, i,p
+
+  if (hybrid%masterthread) write(iulog,*)'Testing accuracy of Pade approx...'
+  JacL = (/ 3.757951454493374d-3, 3.819276450619194d-3, 3.880299668323407d-3,&
+     3.941024255519856d-3, 4.001453427054409d-3, 4.061590011618724d-3,&
+     4.121436472079190d-3, 4.180994935960876d-3, 4.240267208588646d-3,&
+     4.299254777865632d-3, 4.357958817789391d-3, 4.416380194910784d-3,&
+     4.474519480093797d-3, 4.532376966683320d-3, 4.589952695389095d-3,&
+     4.647246485637452d-3, 4.704257972792853d-3, 4.760986650405008d-3,&
+     4.817431916249652d-3/)
+
+  JacD = (/-7.738077153201838d-3, -7.801334908243546d-3,&
+     -7.923983063331936d-3, -8.046030284613884d-3, -8.167482988553411d-3,&
+     -8.288347249486747d-3, -8.408628369535837d-3, -8.528330932396275d-3,&
+     -8.647458848755431d-3, -8.766015375402829d-3, -8.884003124541974d-3,&
+     -9.001424074841970d-3, -9.118279590907854d-3, -9.234570454679255d-3,&
+     -9.350296910174005d-3, -9.465458721612778d-3, -9.580055244031766d-3,&
+     -9.694085504896373d-3, -9.807548294578283d-3, -9.920442262019286d-3/)
+
+  JacU = (/7.738077153201838d-3, 4.043383453750170d-3, 4.104706612712742d-3,&
+     4.165730616290477d-3, 4.226458733033555d-3, 4.286893822432338d-3,&
+     4.347038357917113d-3, 4.406894460317085d-3, 4.466463912794555d-3,&
+     4.525748166814183d-3, 4.584748346676341d-3, 4.643465257052578d-3,&
+     4.701899395997070d-3, 4.760050974585458d-3, 4.817919943490685d-3,&
+     4.875506026223682d-3, 4.932808758394314d-3, 4.989827532103520d-3,&
+     5.046561644173274d-3/)
+
+  ! Form matrix A                                                                                                                                            
+
+  A = 0.d0
+  iden = 0.d0
+  do i =1,19
+    A(i,i+20) = dcmplx(JacD(i),0.d0)
+    A(i,i+21) = dcmplx(JacU(i),0.d0)
+    A(i+1, i+20) = dcmplx(JacL(i),0.d0)
+    A(i+20,i) = dcmplx(1.d0,0.d0)
+    iden(i,i) = 1.d0
+    iden(20+i, 20+i) = 1.d0
+  end do
+  A(40,20) = 1.d0
+  A(20,40) = dcmplx(JacD(20),0.d0)
+  iden(20,20) = 1.d0
+  iden(40,40) = 1.d0
+
+  A = A * g
+  Acopy = A
+  call ZGEEV('V','V',40,A,40,D,garbage,40,factor,40,work2,100,rwork,info)
+
+  if (info /= 0) then
+    stop 'Eigen decomposition failed.'
+  end if
+  exactExp = 0.d0
+  do i = 1,40
+    exactExp(i,i) = exp(D(i))
+!     exactExp(i,i) = D(i) ! for testing matrix decomposition                                                                                                
+  end do
+
+ factorInv = factor
+
+  call ZGETRF(40,40,factorInv,40,ipiv,info)
+  if (info /= 0) then
+    stop 'Matrix is numerically singular!'
+  end if
+
+  call ZGETRI(40,factorInv,40,ipiv,work,40,info)
+  if (info /= 0) then
+!    print *, "************************"                                                                                                                     
+!    print *, "D = ", D                                                                                                                                      
+    stop 'Matrix inversion failed! - accuracy test'
+  end if
+
+!  print *, "********************************************"                                                                                                   
+!  print *, "Eigen-decomposition error = ", norm2(real(matmul(matmul(factor,                                                                                 
+!  exactExp),factorInv)) - real(Acopy))                                                                                                                      
+!   print *, "***********************************************"                                                                                               
+!   print *, "Factor inverse: ", norm2(real(matmul(factor, factorInv)) - iden)                                                                               
+  exactExp = matmul(matmul(factor,exactExp), factorInv)
+
+!  print *, "*********************************"                                                                                                              
+!  print *, "entry of factor =  ", factor(1,1)                                                                                                               
+!  print *, "entry of factorInv =  ", factorInv(1,1)                                                                                                         
+!  print *, "entry of exact =  ", exactExp(1,1)                                                                                                              
+!  print *, "entry of approx =  ", approxexpJac(1,1)                                                                                                         
+!  stop                                                                                                                                                      
+! Rational approximation                                                                                                                                     
+!    call matrix_exponential2(JacL, JacD, JacU,20,1.d0, approxexpJac) !    Taylor approx                                                                     
+    call matrix_exponential(JacL,JacD,JacU,20,1.d0,approxexpJac)
+    error = norm2(real(exactExp) - approxexpJac)
+    if (error > 1e-3) then
+      write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
+      write(iulog,*)'Please check that the exact matrix exponential in eos.F90 is actually exact'
+    else
+      if (hybrid%masterthread) write(iulog,*)&
+          'PASS. max error of analytic and exact matrix exponential: ', error
+    end if
+  end subroutine test_matrix_exponential_accuracy
+
+
 end module 
