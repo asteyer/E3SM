@@ -4015,7 +4015,7 @@ contains
           enddo
           enddo
           enddo
-        end do
+        end if
 #endif
      endif
      if (scale3 /= 0) then
