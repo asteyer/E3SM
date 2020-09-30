@@ -9,6 +9,7 @@ module exp_mod
   use eos,                only: pnh_and_exner_from_eos
   use derivative_mod,     only: derivative_t
   use hybrid_mod,         only: hybrid_t
+  use perf_mod,           only: t_startf, t_stopf 
 
   implicit none
   private
@@ -16,9 +17,85 @@ module exp_mod
   public :: matrix_exponential, matrix_exponential2, phi_func, getLu,add_Lu,& 
               formJac,tri_inv,tri_mult,apply_phi_func, apply_phi_func_new,& 
               phi_func_new,store_state,linear_combination_of_elem,&
-              phi1Ldt,retrieve_state,&
-              expLdtwphi,get_exp_jacobian
+              phi1Ldt,retrieve_state,matrix_exponential_taylorseries,&
+              expLdtwphi,get_exp_jacobian,horners_method_tridiag_times_vector,&
+              tridiag_times_vector
+
   contains
+
+
+  subroutine matrix_exponential_taylorseries(JacL,JacD,JacU,nlev,alpha,wphi,expJwphi)
+    real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
+    integer, intent(in) :: nlev
+    real (kind=real_kind), intent(in) :: alpha ! usually alpha = g*dt
+    real (kind=real_kind), dimension(:), intent(in) :: wphi(2*nlev) 
+    real (kind=real_kind), dimension(:), intent(inout) :: expJwphi(2*nlev) 
+
+    ! local variables                                                   
+    real (kind=real_kind) ::  coeffs1(5), coeffs2(5),coeffs3(4)
+    real (kind=real_kind), dimension(:) :: expJwphitemp(2*nlev) 
+
+    coeffs1(1) = 1d0
+    coeffs1(2) = alpha**2d0/2d0
+    coeffs1(3) = alpha**4d0/24d0
+    coeffs1(4) = alpha**6d0/720d0
+    coeffs1(5) = alpha**8d0/40320d0
+
+    coeffs2(1) = 0d0
+    coeffs2(2) = alpha
+    coeffs2(3) = alpha**3d0/6d0
+    coeffs2(4) = alpha**5d0/120d0
+    coeffs2(5) = alpha**7d0/5040d0
+
+    coeffs3(1) = alpha
+    coeffs3(2) = alpha**3d0/6d0
+    coeffs3(3) = alpha**5d0/120d0
+    coeffs2(4) = alpha**7d0/5040d0
+ 
+    call horners_method_tridiag_times_vector(JacL,JacD,JacU,wphi(1:20),expJwphitemp(1:20),20,4,coeffs1(1:5))              
+    call horners_method_tridiag_times_vector(JacL,JacD,JacU,wphi(21:40),expJwphitemp(21:40),20,4,coeffs2(1:5))               
+    expJwphi(1:20) = expJwphitemp(21:40) + expJwphitemp(1:20)                                                   
+
+    call horners_method_tridiag_times_vector(JacL,JacD,JacU,wphi(1:20),expJwphitemp(1:20),20,3,coeffs3(1:4))           
+    call horners_method_tridiag_times_vector(JacL,JacD,JacU,wphi(21:40),expJwphitemp(21:40),20,4,coeffs1(1:5))                
+    expJwphi(21:40) = expJwphitemp(21:40) + expJwphitemp(1:20)
+
+  end subroutine matrix_exponential_taylorseries
+
+  subroutine tridiag_times_vector(TriL,TriD,TriU,vecin,vecout,dim)
+    integer, intent(in)                  :: dim
+    real (kind = real_kind), intent(in)  :: TriL(dim-1),TriD(dim),TriU(dim-1),vecin(dim)
+    real (kind = real_kind), intent(out) :: vecout(dim)
+    ! local variables
+    integer :: k
+    real (kind = real_kind) :: vectemp(dim)
+    do k = 2,dim-1
+      vectemp(k) = TriL(k-1)*vecin(k-1) + TriD(k)*vecin(k) & 
+        + TriU(k)*vecin(k+1)
+    end do
+    vectemp(1)   = TriD(1)*vecin(1)+TriU(1)*vecin(2)
+    vectemp(dim) = TriL(dim-1)*vecin(dim-1) + TriD(dim)*vecin(dim)
+    vecout       = vectemp
+  end subroutine tridiag_times_vector
+
+  subroutine horners_method_tridiag_times_vector(TriL,TriD,TriU,vecin,vecout,dim,order,coeffs)
+    integer, intent(in)                  :: dim,order
+    real (kind = real_kind),dimension(:), intent(in)  :: TriL(dim-1),TriD(dim),TriU(dim-1)
+    real (kind = real_kind),dimension(:), intent(in)  :: vecin(dim),coeffs(order+1)
+    real (kind = real_kind),dimension(:), intent(out) :: vecout(dim)
+    ! local variables
+    integer :: k
+    real (kind = real_kind), dimension(:) :: vecouttemp(dim)
+
+    vecouttemp = 0d0
+    vecout(:)  = coeffs(order+1)*vecin(:)  
+    ! this loop computes p(Tri)*v where p(Tri) = coeff(1)+coeff(2)*Tri + ...
+    do k = 0,order-1
+      ! compute Tri p(A)_prev vecin and write to vecout
+      call tridiag_times_vector(TriL,TriD,TriU,vecout,vecouttemp,dim)
+      vecout(:) = coeffs(order-k)*vecin(:) + vecouttemp(:)
+    end do
+  end subroutine horners_method_tridiag_times_vector
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   subroutine matrix_exponential(JacL, JacD, JacU, dimDiag, dt, expJ, w)
@@ -48,8 +125,8 @@ module exp_mod
   real (kind=real_kind) normJ, pfac, fac, alpha
   integer i,j,p,q,info, maxiter, k, dimJac 
 
-  p = 2  ! parameter used in diagonal Pade approximation
-  q = 2
+  p = 6  ! parameter used in diagonal Pade approximation
+  q = 0
   pfac = 1.d0/gamma(dble(p+q+1.d0))
   ! Initialize random A and normalize
   dimJac = 2*dimDiag
@@ -103,12 +180,14 @@ module exp_mod
   enddo ! end do loop for Pade approx
 
   ! Invert matrix D
-  call get_DinvN(p, D, N, expJ, Tri, alpha, 2,dimJac) ! using tridiagonal solves
+  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac) ! using tridiagonal solves
 !  call get_DinvN(p, D, N, expJ, Tri, alpha, 1,dimJac)  ! using full LU factorization
 
   ! Squaring
   do i=1,k
-    expJ = matmul(expJ, expJ)
+!    expJ = matmul(expJ, expJ)
+!    expJ(:,:) = expJ(:,:)*expJ(:,:)
+    call DGEMM('N', 'N', dimJac, dimJac, dimJac, 1D0, expJ, dimJac, expJ, dimJac,0d0, expJ,dimJac)
   end do
   if (present(w)) then
     w = matmul(expJ, w)
@@ -137,16 +216,18 @@ module exp_mod
                           scaling_const, Jac(2*nlev,2*nlev), normJac
   integer :: i, k, maxiter
 
+  call t_startf("matrix_exponential_new")
 ! TO DO: Approximate norm without forming Jacobian
   ! Scaling by power of 2
   maxiter = 15
   k = 0
+  call t_startf("matrix_exponential_new_scaling")
   call formJac(JacL,JacD,JacU,dt,Jac)
   do while((norm2(Jac)>0.5d0).and.(k<maxiter))
     Jac = Jac / 2.d0
     k = k + 1
   end do ! end while loop
-
+ 
 !  normJac = g*dt
 !  do while(normJac > 0.5/sqrt(real(nlev)))
 !    normJac = normJac/2.d0
@@ -154,7 +235,9 @@ module exp_mod
 !  end do
 
   scaling_const = g*dt/(2**k) ! scaling and squaring normalization constant
+  call t_stopf("matrix_exponential_new_scaling")
 
+  call t_startf("matrix_exponential_new_formND")
   ! form N(A) = I + 1/2 A + 1/12 A^2
   N = 0.d0
   do i = 1,nlev-1
@@ -187,16 +270,23 @@ module exp_mod
   D(1:nlev,1+nlev:2*nlev)        = -N(1:nlev,1+nlev:2*nlev)
   D(1+nlev:2*nlev,1:nlev)        = -N(1+nlev:2*nlev,1:nlev)
   D(1+nlev:2*nlev,1+nlev:2*nlev) = N(1+nlev:2*nlev,1+nlev:2*nlev)
+  call t_stopf("matrix_exponential_new_formND")
 
   ! Invert matrix D
+  call t_startf("matrix_exponential_new_Dinv")
   call get_DinvN_new(D,N,expJ,scaling_const*JacL,scaling_const*JacD,scaling_const*JacU,dcmplx(scaling_const))
+  call t_stopf("matrix_exponential_new_Dinv")
+
 
   ! Squaring
+  call t_startf("matrix_exponential_new_squaring")
   do i=1,k
     expJ = matmul(expJ, expJ)
   end do
+  call t_stopf("matrix_exponential_new_squaring")
 
   ! multiply by wphi if necessary
+  call t_startf("matrix_exponential_new_timeswphi")
   if (present(wphi)) then
     wphi = matmul(expJ, wphi)
   end if
@@ -534,6 +624,7 @@ module exp_mod
   integer               :: ipiv(nlev)
   complex(kind=8)       :: work(nlev)
   
+  call t_startf("apply_phi_func")
   do ie = nets, nete
     do i = 1,np
       do j = 1,np
@@ -552,6 +643,8 @@ module exp_mod
       elem(ie)%state%dp3d(:,:,:,n0)      = 1/gamma(dble(deg)+1.d0)*elem(ie)%state%dp3d(:,:,:,n0)
     end if
   end do
+
+  call t_stopf("apply_phi_func")
   end subroutine apply_phi_func
 
 !============================================================================
@@ -573,6 +666,7 @@ module exp_mod
   integer               :: ipiv(nlev)
   complex(kind=8)       :: work(2*nlev)
   
+  call t_startf("phi_func")
   Lcopy = JacL
   Dcopy = JacD
   Ucopy = JacU
@@ -585,16 +679,22 @@ module exp_mod
 !  call DGETRI(2*nlev, JInv, 2*nlev, ipiv, work, 2*nlev, info)
 
   c = wphivec
-!  call matrix_exponential(JacL,JacD,JacU,nlev,dt,expJ,c)
-  call matrix_exponential_new(JacL,JacD,JacU,dt,expJ,c)
+!
+  call t_startf("phi_func_matrix_exponential_taylorseries")
+    call matrix_exponential(JacL,JacD,JacU,nlev,dt,expJ,c)
+!  call matrix_exponential_taylorseries(JacL,JacD,JacU,nlev,dt*g,c,c)
+  call t_stopf("phi_func_matrix_exponential_taylorseries")
+
   c = c - wphivec
   c_1 = c(1:nlev)
   c_2 = c(nlev+1:2*nlev)
   phi_k = 0.d0
   phi_k(1:nlev) = c_2
 
+  call t_startf("phi_func_tridiagsolves")
   call DGTTRF(nlev,Lcopy,Dcopy,Ucopy,du2,ipiv,info)
   call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,c_1,nlev,info)
+  call t_stopf("phi_func_tridiagsolves")
 
   phi_k(nlev+1:2*nlev) = c_1
   phi_k = phi_k/(g*dt)
@@ -625,6 +725,7 @@ module exp_mod
 !      end if
     end do
   end if
+    call t_stopf("phi_func")
   end subroutine phi_func
 
 !============================================================================

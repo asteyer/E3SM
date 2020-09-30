@@ -30,7 +30,8 @@ module model_init_mod
   use exp_mod,            only: matrix_exponential,matrix_exponential2,phi_func,getLu,&
                                 formJac,tri_inv,tri_mult,phi_func_new,apply_phi_func,&
                                 apply_phi_func_new,store_state,linear_combination_of_elem,&
-                                get_exp_jacobian 
+                                get_exp_jacobian,matrix_exponential_taylorseries,&
+                                horners_method_tridiag_times_vector,tridiag_times_vector
   implicit none
   
 contains
@@ -114,6 +115,10 @@ contains
     ! unit test for mat_exp accuracy
     call test_matrix_exponential_accuracy(hybrid)
     ! 
+
+    ! unit test for horner's method
+    call test_horners_method(hybrid)
+
 
     ! unit test for phi functions
 !    call test_phifunc(hybrid)
@@ -455,11 +460,11 @@ contains
 
   ! new phi1 function
   call phi_func_new(JacL_elem,JacD_elem,JacU_elem,dt,2,phi_func_struct,elem,tl%n0,nets,nete)
-  call apply_phi_func_new(phi_func_struct,2,1,elem,tl%n0,nets,nete)
+!  call apply_phi_func_new(phi_func_struct,2,1,elem,tl%n0,nets,nete)
   call store_state(elem,tl%n0,nets,nete,stage2)
 
   ! old phi1 function
-  call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,tl%np1,elem,nets,nete) 
+!  call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,1,tl%np1,elem,nets,nete) 
   call store_state(elem,tl%np1,nets,nete,stage1)
   
   error = norm2(stage1(:,:,:,1:nlev,:)-stage2(:,:,:,1:nlev,:))
@@ -472,12 +477,12 @@ contains
   
   ! new phi2 function
   call linear_combination_of_elem(tl%n0,1.d0,tl%nm1,0.d0,tl%n0,elem,nets,nete)
-  call apply_phi_func_new(phi_func_struct,2,2,elem,tl%n0,nets,nete)
+!  call apply_phi_func_new(phi_func_struct,2,2,elem,tl%n0,nets,nete)
   call store_state(elem,tl%n0,nets,nete,stage2)
 
   ! old phi2 function
   call linear_combination_of_elem(tl%np1,1.d0,tl%nm1,0.d0,tl%np1,elem,nets,nete)
-  call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,tl%np1,elem,nets,nete)
+!  call apply_phi_func(JacL_elem,JacD_elem,JacU_elem,dt,2,tl%np1,elem,nets,nete)
   call store_state(elem,tl%np1,nets,nete,stage1)  
 
   error = norm2(stage1(:,:,:,1:nlev,:)-stage2(:,:,:,1:nlev,:))
@@ -496,14 +501,15 @@ contains
 
   type(hybrid_t)    , intent(in) :: hybrid
 
-  ! local                                                                                                                                                    
+  ! local                                                     
+  real (kind=real_kind) :: Expwphi(40),ExpwphiTS(40),wphi(40)
   real (kind=real_kind) :: approxexpJac(40,40), iden(40,40)
   complex(kind=8) :: factor(40,40), factorInv(40,40), exactExp(40,40), A(40,40), garbage(40,40), Acopy(40,40)
   complex(kind=8) :: work(40), D(40), work2(100)
   real (kind=real_kind) :: JacL(19), JacU(19), JacD(20), rwork(80)
   integer, dimension(40) :: ipiv
   real (kind = real_kind) :: error
-  integer :: n, info, i,p
+  integer :: n, info, i,p,k
 
   if (hybrid%masterthread) write(iulog,*)'Testing accuracy of Pade approx...'
   JacL = (/ 3.757951454493374d-3, 3.819276450619194d-3, 3.880299668323407d-3,&
@@ -547,7 +553,7 @@ contains
   iden(20,20) = 1.d0
   iden(40,40) = 1.d0
 
-  A = A * g
+!  A = A * g
   Acopy = A
   call ZGEEV('V','V',40,A,40,D,garbage,40,factor,40,work2,100,rwork,info)
 
@@ -557,7 +563,7 @@ contains
   exactExp = 0.d0
   do i = 1,40
     exactExp(i,i) = exp(D(i))
-!     exactExp(i,i) = D(i) ! for testing matrix decomposition                                                                                                
+!     exactExp(i,i) = D(i) ! for testing matrix decomposition                           
   end do
 
  factorInv = factor
@@ -569,27 +575,27 @@ contains
 
   call ZGETRI(40,factorInv,40,ipiv,work,40,info)
   if (info /= 0) then
-!    print *, "************************"                                                                                                                     
-!    print *, "D = ", D                                                                                                                                      
+!    print *, "************************"                  
+!    print *, "D = ", D                                                                   
     stop 'Matrix inversion failed! - accuracy test'
   end if
 
-!  print *, "********************************************"                                                                                                   
-!  print *, "Eigen-decomposition error = ", norm2(real(matmul(matmul(factor,                                                                                 
-!  exactExp),factorInv)) - real(Acopy))                                                                                                                      
-!   print *, "***********************************************"                                                                                               
-!   print *, "Factor inverse: ", norm2(real(matmul(factor, factorInv)) - iden)                                                                               
+!  print *, "********************************************"                                 
+!  print *, "Eigen-decomposition error = ", norm2(real(matmul(matmul(factor,                
+!  exactExp),factorInv)) - real(Acopy))                                                     
+!   print *, "***********************************************"                             
+!   print *, "Factor inverse: ", norm2(real(matmul(factor, factorInv)) - iden)              
   exactExp = matmul(matmul(factor,exactExp), factorInv)
-
-!  print *, "*********************************"                                                                                                              
-!  print *, "entry of factor =  ", factor(1,1)                                                                                                               
-!  print *, "entry of factorInv =  ", factorInv(1,1)                                                                                                         
-!  print *, "entry of exact =  ", exactExp(1,1)                                                                                                              
-!  print *, "entry of approx =  ", approxexpJac(1,1)                                                                                                         
-!  stop                                                                                                                                                      
-! Rational approximation                                                                                                                                     
-!    call matrix_exponential2(JacL, JacD, JacU,20,1.d0, approxexpJac) !    Taylor approx                                                                     
-    call matrix_exponential(JacL,JacD,JacU,20,1.d0,approxexpJac)
+!  print *, "*********************************"                                           
+!  print *, "entry of factor =  ", factor(1,1)
+!  print *, "entry of factorInv =  ", factorInv(1,
+!  print *, "entry of exact =  ", exactExp(1,1)  
+!  print *, "entry of approx =  ", approxexpJac(1,1)                                       
+!  stop                  
+! Rational approximation                                                                 
+!    call matrix_exponential2(JacL, JacD, JacU,20,1.d0, approxexpJac) !    Taylor approx   
+    call matrix_exponential(JacL,JacD,JacU,20,1d0,approxexpJac)
+ 
     error = norm2(real(exactExp) - approxexpJac)
     if (error > 1e-3) then
       write(iulog,*)'WARNING:  Analytic and exact matrix exponentials differ by ', error
@@ -598,7 +604,169 @@ contains
       if (hybrid%masterthread) write(iulog,*)&
           'PASS. max error of analytic and exact matrix exponential: ', error
     end if
+
+    wphi = (/0.25d0,0.0923d0,-0.20394832d0,0.0834d0,&
+             0.1249d0,-0.5802302d0,-0.923409328342d0,0.12394d0,&
+            -0.99991d0,-0.43494d0,0.779380123d0,0.3298474d0,&
+             0.68392d0,-0.0823430d0,0.9832042d0,-0.9823043d0,&
+             0.394832042d0,0.1231242d0,0.0021923d0,0.3311d0,&
+             0.0398523d0,-0.92384032d0,0.59082342d0,-.009238423d0,&
+             0.109248d0,-0.72374d0,-0.87242d0,0.120948d0,&
+             0.902482d0,0.29023802d0,-0.398230482d0,-0.459084d0,&
+             0.2093482d0,0.59084534d0,-0.23489320d0,0.674829d0,&
+             0.39803242d0,-0.234820d0,0.3985023d0,0.98274892d0/)
+
+    Expwphi = wphi
+!    call matrix_exponential(JacL,JacD,JacU,20,1d-3,approxexpJac,Expwphi)
+    Expwphi = matmul(exactExp,wphi)
+    call matrix_exponential_taylorseries(JacL,JacD,JacU,20,1d0,wphi,ExpwphiTS)
+    print *, "hey  = ", norm2(Expwphi-ExpwphiTS)
+    print *, "hey2 = ", 1d0*(1d0 + norm2(JacL) + norm2(JacD) + norm2(JacU))
+
   end subroutine test_matrix_exponential_accuracy
 
+  subroutine test_horners_method(hybrid)
+
+    type(hybrid_t)    , intent(in) :: hybrid
+    ! local                                                                                   
+    real (kind=real_kind) :: coeffs0(4),coeffs1(4),coeffs2(3),coeffs3(7),coeffs(5)
+    real (kind=real_kind) :: v1(20),v2(20),vrandom(20),vtemp(20)
+    real (kind=real_kind) :: JacL(19),JacU(19),JacD(20),Tri(20,20)
+    real (kind=real_kind) :: wphi(40),wphi1(40),wphi2(40),Jac(40,40)
+    real (kind = real_kind) :: error
+    integer :: k
+
+    if (hybrid%masterthread) write(iulog,*)'Testing accuracy of Horners method...'
+    JacL = (/ 3.757951454493374d-3, 3.819276450619194d-3, 3.880299668323407d-3,&
+       3.941024255519856d-3, 4.001453427054409d-3, 4.061590011618724d-3,&
+       4.121436472079190d-3, 4.180994935960876d-3, 4.240267208588646d-3,&
+       4.299254777865632d-3, 4.357958817789391d-3, 4.416380194910784d-3,&
+       4.474519480093797d-3, 4.532376966683320d-3, 4.589952695389095d-3,&
+       4.647246485637452d-3, 4.704257972792853d-3, 4.760986650405008d-3,&
+       4.817431916249652d-3/)
+
+    JacD = (/-7.738077153201838d-3, -7.801334908243546d-3,&
+       -7.923983063331936d-3, -8.046030284613884d-3, -8.167482988553411d-3,&
+       -8.288347249486747d-3, -8.408628369535837d-3, -8.528330932396275d-3,&
+       -8.647458848755431d-3, -8.766015375402829d-3, -8.884003124541974d-3,&
+       -9.001424074841970d-3, -9.118279590907854d-3, -9.234570454679255d-3,&
+       -9.350296910174005d-3, -9.465458721612778d-3, -9.580055244031766d-3,&
+       -9.694085504896373d-3, -9.807548294578283d-3, -9.920442262019286d-3/)
+
+    JacU = (/7.738077153201838d-3, 4.043383453750170d-3, 4.104706612712742d-3,&
+       4.165730616290477d-3, 4.226458733033555d-3, 4.286893822432338d-3,&
+       4.347038357917113d-3, 4.406894460317085d-3, 4.466463912794555d-3,&
+       4.525748166814183d-3, 4.584748346676341d-3, 4.643465257052578d-3,&
+       4.701899395997070d-3, 4.760050974585458d-3, 4.817919943490685d-3,&
+       4.875506026223682d-3, 4.932808758394314d-3, 4.989827532103520d-3,&
+       5.046561644173274d-3/)
+
+
+    ! form the tridiagonal matrix
+    Tri      = 0d0
+    Tri(1,1) = JacD(1)
+    Tri(1,2) = JacU(1)
+    do k = 2,19
+      Tri(k,k)   = JacD(k) 
+      Tri(k,k-1) = JacL(k-1)
+      Tri(k,k+1) = JacU(k)
+    end do
+    Tri(20,20) = JacD(20)
+    Tri(20,19) = JacL(19)
+
+    ! make a random vector
+    vrandom = (/0.25d0,0.0923d0,-0.20394832d0,0.0834d0,&
+                0.1249d0,-0.5802302d0,-0.923409328342d0,0.12394d0,&
+               -0.99991d0,-0.43494d0,0.779380123d0,0.3298474d0,&
+                0.68392d0,-0.0823430d0,0.9832042d0,-0.9823043d0,&
+                0.394832042d0,0.1231242d0,0.0021923d0,0.3311d0/)
+    v1 = 0d0
+    call tridiag_times_vector(JacL,JacD,JacU,vrandom,v1,20)
+    v2 = matmul(Tri,vrandom)
+
+    error = norm2(v1-v2)
+    if (error > 1e-15) then
+      write(iulog,*)'WARNING:  tridiagonal left multiply and matmul differ by ', error
+      write(iulog,*)'Please check the tridiag_times_vector subroutine in exp_mod for bugs'
+    else
+    if (hybrid%masterthread) write(iulog,*)&
+          'PASS. max error of tridiagonal left multiply and matmul differ by: ', error
+    end if
+
+    coeffs(1) = 1d0
+    coeffs(2) = 1/2d0
+    coeffs(3) = 1/6d0
+    coeffs(4) = 1/24d0
+    coeffs(5) = 1/120d0
+
+    v1 = 0d0
+    v2 = 0d0
+
+    vtemp = vrandom
+    v1    = coeffs(1)*vrandom
+    do k =2,5
+      vtemp = matmul(Tri,vtemp)
+      v1    = v1(:) + coeffs(k)*vtemp(:)
+    end do
+    call horners_method_tridiag_times_vector(JacL,JacD,JacU,vrandom,v2,20,4,coeffs(1:5)) 
+    error = norm2(v1-v2)
+    if (error > 1e-15) then
+      write(iulog,*)'WARNING: Horners method and direct evaluation of a polynomial in a tridiagonal matrix differ by ', error
+      write(iulog,*)'Please check the horners_method_tridiag_times_vector subroutine in exp_mod for bugs'
+    else
+    if (hybrid%masterthread) write(iulog,*)&
+          'PASS. Horners method and direct evaluation of a polynomial in a tridiagonal matrix differ by ', error
+    end if
+
+    wphi = (/0.25d0,0.0923d0,-0.20394832d0,0.0834d0,&
+             0.1249d0,-0.5802302d0,-0.923409328342d0,0.12394d0,&
+            -0.99991d0,-0.43494d0,0.779380123d0,0.3298474d0,&
+             0.68392d0,-0.0823430d0,0.9832042d0,-0.9823043d0,&
+             0.394832042d0,0.1231242d0,0.0021923d0,0.3311d0,&
+             0.0398523d0,-0.92384032d0,0.59082342d0,-.009238423d0,&
+             0.109248d0,-0.72374d0,-0.87242d0,0.120948d0,&
+             0.902482d0,0.29023802d0,-0.398230482d0,-0.459084d0,&
+             0.2093482d0,0.59084534d0,-0.23489320d0,0.674829d0,&
+             0.39803242d0,-0.234820d0,0.3985023d0,0.98274892d0/)
+
+    ! form the tridiagonal matrix                                                                 
+    Jac           = 0d0
+    Jac(1,nlev+1) = JacD(1)
+    Jac(1,nlev+2) = JacU(1)
+    do k = 2,19
+      Jac(k,nlev+k)   = JacD(k)
+      Jac(k,nlev+k-1) = JacL(k-1)
+      Jac(k,nlev+k+1) = JacU(k)
+      Jac(nlev+k,k)   = 1d0
+    end do
+    Jac(20,nlev+20) = JacD(20)
+    Jac(20,nlev+19) = JacL(19)
+    Jac(40,20)      = 1d0
+    Jac(21,1)       = 1d0
+
+    coeffs3(1) = 1d0
+    coeffs3(2) = 1d0
+    coeffs3(3) = 1d0/2d0
+    coeffs3(4) = 1d0/6d0
+    coeffs3(5) = 1d0/24d0
+    coeffs3(6) = 1d0/120d0
+    coeffs3(7) = 1d0/720d0
+    coeffs3(8) = 1d0/5040d0
+    coeffs3(9) = 1d0/40320d0
+    wphi1 = wphi
+    wphi2 = coeffs3(1)*wphi
+    do k =2,7
+      wphi1 = matmul(Jac,wphi1)
+      wphi2 = wphi2(:) + coeffs3(k)*wphi1(:)
+    end do
+    call matrix_exponential_taylorseries(JacL,JacD,JacU,20,1d0,wphi,wphi1)
+    if (error > 1e-15) then
+      write(iulog,*)'WARNING: matrix_exponential_taylorseries has error = ', error
+      write(iulog,*)'Please check the matrix_exponential_taylorseries subroutine in exp_mod for bugs'
+    else
+    if (hybrid%masterthread) write(iulog,*)&
+          'PASS. matrix_exponential_taylorseries has error = ', error
+    end if
+  end subroutine test_horners_method
 
 end module 
