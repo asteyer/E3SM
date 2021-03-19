@@ -9,6 +9,7 @@ module exp_mod
   use eos,                only: pnh_and_exner_from_eos
   use derivative_mod,     only: derivative_t
   use hybrid_mod,         only: hybrid_t
+  use perf_mod,           only: t_startf,t_stopf
 
   implicit none
   private
@@ -134,44 +135,37 @@ module exp_mod
 
   ! local variables
   real(kind=real_kind) :: N(2*nlev,2*nlev), D(2*nlev,2*nlev), DinvN(2*nlev,2*nlev),&
-                          scaling_const, Jac(2*nlev,2*nlev), normJac
+                          scaling_const, Jac(2*nlev,2*nlev), normJac, coeffs(10), wphiin(2*nlev),&
+                          wphiout(2*nlev),wphiout2(2*nlev),normJ
   integer :: i, k, maxiter
 
 ! TO DO: Approximate norm without forming Jacobian
   ! Scaling by power of 2
   maxiter = 15
-  k = 0
-  call formJac(JacL,JacD,JacU,dt,Jac)
-  do while((norm2(Jac)>0.5d0).and.(k<maxiter))
-    Jac = Jac / 2.d0
-    k = k + 1
+  k = 1
+!  call formJac(JacL,JacD,JacU,dt,Jac)
+  normJ   = g*dt*(1d0 + norm2(JacL) + norm2(JacU) + norm2(JacD))
+  normJac = normJ
+  do while((normJac>0.75d0).and.(k<maxiter))
+    normJac = normJ/2
+    k       = k + 1
   end do ! end while loop
 
-!  normJac = g*dt
-!  do while(normJac > 0.5/sqrt(real(nlev)))
-!    normJac = normJac/2.d0
-!    k = k+1
-!  end do
+  scaling_const = g*dt/k ! scaling and squaring normalization constant
 
-  scaling_const = g*dt/(2**k) ! scaling and squaring normalization constant
-
-  ! form N(A) = I + 1/2 A + 1/12 A^2
   N = 0.d0
   do i = 1,nlev-1
-    ! N_11 block
+    ! N_11 block                                                                                                                 
     N(i,i)   = scaling_const**2/12.d0*JacD(i) + 1.d0
     N(i,i+1) = scaling_const**2/12.d0*JacU(i)
     N(i+1,i) = scaling_const**2/12.d0*JacL(i)
-
-    ! N_12 block
+    ! N_12 block                                                                                                                 
     N(i,i+nlev)   = scaling_const/2.d0*JacD(i)
     N(i,i+1+nlev) = scaling_const/2.d0*JacU(i)
     N(i+1,i+nlev) = scaling_const/2.d0*JacL(i)
- 
-    ! N_21 block
-    N(i+nlev,i) = scaling_const/2.d0 
-
-    ! N_22 block
+    ! N_21 block                                                                                                                 
+    N(i+nlev,i) = scaling_const/2.d0
+    ! N_22 block                                                                                                                 
     N(i+nlev,i+nlev)   = scaling_const**2/12.d0*JacD(i) + 1.d0
     N(i+nlev,i+1+nlev) = scaling_const**2/12.d0*JacU(i)
     N(i+1+nlev,i+nlev) = scaling_const**2/12.d0*JacL(i)
@@ -180,26 +174,27 @@ module exp_mod
   N(2*nlev,2*nlev) = scaling_const**2/12.d0*JacD(nlev)+1.d0
   N(nlev,2*nlev)   = scaling_const/2.d0*JacD(nlev)
   N(2*nlev,nlev)   = scaling_const/2.d0
-
-  ! form D(A) = I + 1/2 A + 1/12 A^2 (only differs from N(A) in sign on the
-  ! off-diagonal blocks)
+  ! form D(A) = I + 1/2 A + 1/12 A^2 (only differs from N(A) in sign on the                                                      
+  ! off-diagonal blocks)                                                                                                         
   D(1:nlev,1:nlev)               = N(1:nlev,1:nlev)
   D(1:nlev,1+nlev:2*nlev)        = -N(1:nlev,1+nlev:2*nlev)
   D(1+nlev:2*nlev,1:nlev)        = -N(1+nlev:2*nlev,1:nlev)
   D(1+nlev:2*nlev,1+nlev:2*nlev) = N(1+nlev:2*nlev,1+nlev:2*nlev)
 
-  ! Invert matrix D
-  call get_DinvN_new(D,N,expJ,scaling_const*JacL,scaling_const*JacD,scaling_const*JacU,dcmplx(scaling_const))
 
-  ! Squaring
-  do i=1,k
-    expJ = matmul(expJ, expJ)
-  end do
-
-  ! multiply by wphi if necessary
   if (present(wphi)) then
-    wphi = matmul(expJ, wphi)
-  end if
+   
+    call get_DinvN_new(D,N,expJ,scaling_const*JacL,scaling_const*JacD,&
+      scaling_const*JacU,dcmplx(scaling_const))
+    do i =1,k
+ !     call get_DinvN_new_wphi(wphi,wphiout,JacL*scaling_const,JacD*scaling_const,&
+ !     JacU*scaling_const,dcmplx(scaling_const))
+ !     wphi = wphiout
+ !     wphiin = wphi
+      wphi    = matmul(expJ, wphi)
+    end do
+  else
+  end if 
 
   end subroutine matrix_exponential_new
 !===============================================================================
@@ -364,9 +359,9 @@ module exp_mod
   call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X22,nlev,info)! Solve for X22
   
   ! solve for X11 and X12
-  call tri_mult(JacL,JacD,JacU,X21,Tri_prod,nlev)  ! Compute T*X21
+  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X21,Tri_prod,nlev)  ! Compute T*X21
   X11 = sig1Inv * (pade_const*N11 + Tri_prod)      ! Compute X11
-  call tri_mult(JacL,JacD,JacU,X22,Tri_prod,nlev)  ! Compute T*X22
+  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X22,Tri_prod,nlev)  ! Compute T*X22
   X12 = sig1Inv * (pade_const*N12 + Tri_prod)      ! Compute X12
  
 ! STEP 2:
@@ -399,9 +394,9 @@ module exp_mod
   call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X22,nlev,info) ! Get X22
 
   ! Back substitution for X11, X12
-  call tri_mult(JacL,JacD,JacU,X21,Tri_prod,nlev)  ! Compute T*X21
+  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X21,Tri_prod,nlev)  ! Compute T*X21
   X11 = sig2Inv * (N11 + Tri_prod)                 ! Compute X11
-  call tri_mult(JacL,JacD,JacU,X22,Tri_prod,nlev)  ! Compute T*X22
+  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X22,Tri_prod,nlev)  ! Compute T*X22
   X12 = sig2Inv * (N12 + Tri_prod)                 ! Compute X12
 
   ! return DinvN
@@ -411,6 +406,202 @@ module exp_mod
   DinvN(1+nlev:2*nlev,1+nlev:2*nlev) = X22
 
   end subroutine get_DinvN_new
+
+!============================================================
+!============================================================                                         
+!============================================================                                         
+!============================================================                                         
+!============================================================                                         
+!============================================================                                         
+!============================================================                                         
+
+
+  subroutine get_DinvN_new_wphi(wphi, DinvNwphi, JacL,JacD,JacU,scaling_const)
+  real(kind=real_kind), intent(in)  :: wphi(2*nlev),JacL(nlev-1),JacD(nlev),JacU(nlev-1)
+  real(kind=real_kind), intent(out) :: DinvNwphi(2*nlev)
+  complex(kind=8),      intent(in)  :: scaling_const
+ 
+  ! local variables
+  complex(kind=8) :: sig1, sig2, sig1Inv, sig2Inv, pade_const
+  complex(kind=8) :: work(2*nlev), TriL(nlev-1), TriD(nlev), TriU(nlev-1),&
+                     Tri_prod(nlev), du2(nlev-2), N1(nlev),&
+                     N2(nlev),X1(nlev),X2(nlev)
+  integer         :: info, i, ipiv(2*nlev)
+
+  ! Constants for (2,2) Pade approximant
+  pade_const = (12.d0, 0.d0)
+  sig1       = dcmplx(3.d0,sqrt(3.d0))
+  sig2       = dcmplx(3.d0, (-sqrt(3.d0)))
+  sig1Inv    = conjg(sig1)/(real(sig1)**2 + imag(sig1)**2)
+  sig2Inv    = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
+
+! STEP 1:
+  ! solving the system
+  !    [fac1] [x11 x12] = pade_const*[nhat], where
+  !           [x21 x22]
+  !
+  ! fac1 = [sig i                -jac                 ]
+  !        [  0       sig i - scaling_const*siginv*jac], and
+  !
+  ! nhat = [              n11                                    n12             ]
+  !        [scaling_const*siginv*n11 + n21         scaling_const*siginv*n12 + n22]
+  
+  ! Blocks of N
+  N1 = dcmplx(wphi(1:nlev))
+!  N12 = dcmplx(N(1:nlev,1+nlev:2*nlev))
+  N2 = dcmplx(wphi(1+nlev:2*nlev))
+!  N22 = dcmplx(N(1+nlev:2*nlev,1+nlev:2*nlev))
+
+  ! Tridiagonal matrix: sig1*I - scaling_const*sig1Inv*Jac
+  TriD = dcmplx(JacD)*(-sig1Inv)*scaling_const + sig1
+  TriL = dcmplx(JacL)*(-sig1Inv)*scaling_const
+  TriU = dcmplx(JacU)*(-sig1Inv)*scaling_const
+
+  ! Tridiagonal solve to get X21, X22
+  call zgttrf(nlev,tril,trid,triu,du2,ipiv,info)                  ! LU decomposition
+  X2 = pade_const*(scaling_const*sig1Inv*N1 + N2)              ! Nhat_21 block
+  call zgttrs('N',nlev,1,TriL,TriD,TriU,du2,ipiv,X2,nlev,info)! Solve for X21
+!  X22 = pade_const*(scaling_const*sig1Inv*N12 + N22)              ! Nhat_22 block
+!  call zgttrs('N',nlev,1,TriL,TriD,TriU,du2,ipiv,X22,nlev,info)! Solve for X22
+  
+  ! solve for X11 and X12
+  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X2,Tri_prod,1)  ! Compute T*X21
+  X1 = sig1Inv * (pade_const*N1 + Tri_prod)      ! Compute X11
+!  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X22,Tri_prod,nlev)  ! Compute T*X22
+!  X12 = sig1Inv * (pade_const*N12 + Tri_prod)      ! Compute X12
+ 
+! STEP 2:
+  ! solve the system
+  !    [fac2] [DinvN] = [Nhat], where
+  !
+  ! fac2 = [sig I                -Jac                 ]
+  !        [  0       sig I - scaling_const*sigInv*Jac], and
+  !
+  ! Nhat = [              X11                                    X12             ]
+  !        [scaling_const*sigInv*X11 + X21         scaling_const*sigInv*X12 + X22]
+  !   using the Xij from the previous solve.
+
+  ! Blocks of Nhat
+  N1 = X1
+  N2 = X2
+  ! Tridiagonal matrix T = sig2 I - scaling_const*sig2Inv*Jac
+  TriD = dcmplx(JacD)*(-sig2Inv)*scaling_const + sig2
+  TriL = dcmplx(JacL)*(-sig2Inv)*scaling_const
+  TriU = dcmplx(JacU)*(-sig2Inv)*scaling_const
+
+  ! Tridiagonal solve to get X21, X22
+  call zgttrf(nlev,TriL,TriD,TriU,du2,ipiv,info)                   ! LU decomposition
+  X2 = scaling_const*(sig2Inv)*N1+N2                            ! Nhat_21 block
+  call zgttrs('N',nlev,1,TriL,TriD,TriU,du2,ipiv,X2,nlev,info) ! Get X21
+!  X22 = scaling_const*(sig2Inv)*N12+N22                            ! Nhat_22 block
+!  call zgttrs('N',nlev,nlev,TriL,TriD,TriU,du2,ipiv,X22,nlev,info) ! Get X22
+
+  ! Back substitution for X11, X12
+  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X2,Tri_prod,1)  ! Compute T*X21
+  X1 = sig2Inv * (N1 + Tri_prod)                 ! Compute X11
+!  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X22,Tri_prod,nlev)  ! Compute T*X22
+!  X12 = sig2Inv * (N12 + Tri_prod)                 ! Compute X12
+
+  ! return DinvN
+  DinvNwphi(1:nlev)               = X1(1:nlev)
+!  DinvN(1:nlev,nlev+1:2*nlev)        = X12
+  DinvNwphi(nlev+1:2*nlev)        = X2(1:nlev)
+!  DinvN(1+nlev:2*nlev,1+nlev:2*nlev) = X22
+
+  end subroutine get_DinvN_new_wphi
+
+
+  subroutine get_DinvN_new_wphi_dep(DinvNwphi,JacL,JacD,JacU,scaling_const)
+  real(kind=real_kind), intent(in)  :: JacL(nlev-1),JacD(nlev),JacU(nlev-1)
+  real(kind=real_kind), intent(inout) :: DinvNwphi(2*nlev)
+  complex(kind=8),      intent(in)  :: scaling_const
+ 
+  ! local variables
+  complex(kind=8) :: sig1, sig2, sig1Inv, sig2Inv, pade_const
+  complex(kind=8) :: work(2*nlev), TriL(nlev-1), TriD(nlev), TriU(nlev-1),&
+                      du2(nlev-2),R1(nlev),R2(nlev),&
+                     X1(nlev),X2(nlev)
+  integer         :: info, i, ipiv(2*nlev)
+
+  print *, "hey1"
+
+  ! Constants for (2,2) Pade approximant
+  pade_const = (12.d0, 0.d0)
+  sig1       = dcmplx(3.d0,sqrt(3.d0))
+  sig2       = dcmplx(3.d0, (-sqrt(3.d0)))
+  sig1Inv    = conjg(sig1)/(real(sig1)**2 + imag(sig1)**2)
+  sig2Inv    = conjg(sig2)/(real(sig2)**2 + imag(sig2)**2)
+
+  print*, "hey21"
+
+  R1(1:nlev)        = dcmplx(DinvNwphi(1:nlev))
+  R2(nlev+1:2*nlev) = dcmplx(DinvNwphi(nlev+1:2*nlev))
+
+  ! Tridiagonal matrix:  scaling_const*sig1Inv*Jac - sig1*I
+  TriD = dcmplx(JacD)*(scaling_const)*(sig1Inv) - sig1
+  TriL = dcmplx(JacL)*(sig1Inv)*scaling_const
+  TriU = dcmplx(JacU)*(sig1Inv)*scaling_const
+  X2 = R2 + scaling_const*sig1Inv*R1
+  print*, "hey22"
+
+  ! solve for X2
+  call zgttrf(nlev,TriL,TriD,TriU,du2,ipiv,info)                  ! LU decomposition
+  call zgttrs('N',nlev,1,TriL,TriD,TriU,du2,ipiv,X2,nlev,info)! Solve for X2
+  print*, "hey23"
+  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X2,X1,1)
+  print*, "hey23"
+
+  X1 = -sig2inv*(R1 - X1)
+  print*, "hey24"
+
+  ! at this point (X1,X2) is the solution of [Jac - sig1)(x,y) = rhs
+  R1 = X1
+  R2 = X2
+  ! multiply by (Jac + sig2)
+  print*, "hey25"
+
+  call tri_mult(dcmplx(JacL),dcmplx(JacD)+sig2,dcmplx(JacU),R2,X1,1)
+  print*, "hey26"
+
+  R2 = R1/scaling_const
+  R1 = X1
+
+  print*, "hey3"
+
+
+  ! Tridiagonal matrix:  scaling_const**2*sig1Inv*Jac - sig1*I
+  TriD = dcmplx(JacD)*(scaling_const)*(sig2Inv) - sig2
+  TriL = dcmplx(JacL)*(sig2Inv)*scaling_const
+  TriU = dcmplx(JacU)*(sig2Inv)*scaling_const
+  X2 = R2 + scaling_const*sig2Inv*R1
+  ! solve for X2
+  call zgttrf(nlev,TriL,TriD,TriU,du2,ipiv,info)                  ! LU decomposition
+  call zgttrs('N',nlev,1,TriL,TriD,TriU,du2,ipiv,X2,nlev,info)! Solve for X2
+  call tri_mult(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),X2,X1,1)
+  X1 = -sig1inv*(R1 - X1)
+  ! at this point (X1,X2) is the solution of [Jac - sig1)(x,y) = rhs
+  R1 = X1
+  R2 = X2
+  ! multiply by (Jac + sig1)
+  call tri_mult(dcmplx(JacL),dcmplx(JacD)+sig1,dcmplx(JacU),R2,X1,1)
+
+  print*, "yooooooR2", R2
+  print *, "yooooooX2", X1
+  print*, "hey4"
+
+
+  DinvNwphi(nlev+1:2*nlev) = real(R1(1:nlev)/scaling_const)
+  DinvNwphi(1:nlev) = real(X1(1:nlev))
+
+  print *, "hey5"
+
+  end subroutine get_DinvN_new_wphi_dep
+
+
+
+
+
+
 !===========================================================================================================
   subroutine linear_combination_of_elem(t3,a1,t1,a2,t2,elem,nets,nete)
   !===================================================================================
@@ -810,7 +1001,7 @@ module exp_mod
   end subroutine formJac
 !==============================================================================
   subroutine tri_mult(JacL,JacD,JacU,mat,prod,nrhs)
-  real(kind=real_kind),intent(in) :: JacL(nlev-1),JacD(nlev),JacU(nlev-1)
+  complex(kind=8),intent(in) :: JacL(nlev-1),JacD(nlev),JacU(nlev-1)
   complex(kind=8),intent(in) :: mat(nlev,nrhs)
   complex(kind=8),intent(out) :: prod(nlev,nrhs)
   integer :: nrhs
@@ -1030,7 +1221,10 @@ module exp_mod
         wphivec(1:nlev) = elem(ie)%state%w_i(i,j,1:nlev,n0)
         wphivec(1+nlev:2*nlev) = elem(ie)%state%phinh_i(i,j,1:nlev,n0)
 !        call matrix_exponential(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),nlev,dt,expJ2,wphivec2) ! Pade approximation
+!        call scaledsquared_phifunction_taylorseries(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),&
+!          nlev,g*dt,wphivec,wphivec2,10,0)
         call matrix_exponential_new(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),dt,expJ,wphivec)
+!        print *, "IS THIS GARBAGE?:", norm2(wphivec-wphivec2)
 !        if (norm2(expJ-expJ2)<1e-10) then
 !          print *, "matrix exponential works!"
 !          print *, "Error = ", norm2(expJ-expJ2)
@@ -1110,5 +1304,326 @@ subroutine phi1Ldt(JacL_elem,JacD_elem,JacU_elem,elem,n0,dt,nets,nete)
   end do
 
   end subroutine phi1Ldt
+
+!===================================================================================================                                 
+!===================================================================================================                                 
+!===================================================================================================                                 
+!================= Subroutines for SIAM CSE ========================================================                                 
+!===================================================================================================                                 
+!===================================================================================================                                 
+!===================================================================================================                                 
+  subroutine scaledsquared_phifunction_taylorseries(JacL,JacD,JacU,nlev,alpha,wphi,phifunwphi,tsorder,phiorder)
+    real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
+    integer, intent(in) :: nlev,tsorder,phiorder
+    real (kind=real_kind), intent(in) :: alpha ! usually alpha = g*dt                                                                
+    real (kind=real_kind), dimension(:), intent(in) :: wphi(2*nlev) 
+    real (kind=real_kind), dimension(:), intent(inout) :: phifunwphi(2*nlev) 
+    ! local variables                                                                                                                
+    integer :: j,k
+    real (kind = real_kind) :: normJ,phifunwphitemp(2*nlev),alphatemp,normJtemp
+    real (kind = real_kind) :: phifunwphi2(2*nlev),phifunwphi3(2*nlev),factorialinv
+    normJ = abs(alpha)*(1d0+norm2(JacL)+norm2(JacD)+norm2(JacU))
+    k         = 0
+    alphatemp = alpha
+    normJtemp = normJ
+    do while (normJtemp.gt. 0.5d0)
+      k         = k+1
+      normJtemp = normJ/2**k
+      alphatemp = alpha/2**k
+    end do
+!    print *, "k = here is k =", k                                                                                                   
+!    print *, "phiorder = ", phiorder                                                                                                
+    phifunwphitemp = wphi
+    do j = 1,2**k
+      call phifunction_taylorseries(JacL,JacD,JacU,nlev,alphatemp,phifunwphitemp,phifunwphi,tsorder,0)
+      phifunwphitemp = phifunwphi
+    end do
+
+    if ((phiorder).gt.(0)) then
+      factorialinv = 1d0
+      do j = 1,phiorder
+        if ((j).gt.(1)) then
+          factorialinv = factorialinv/DBLE(j-1)
+        end if
+        phifunwphitemp = phifunwphi - wphi*factorialinv
+        call hevi_linear_solve(JacL,JacD,JacU,nlev,alpha,phifunwphitemp,phifunwphi)
+      end do
+!      phifunwphi2 = phifunwphi                                                                                                      
+!      call hevi_left_multiply(JacL,JacD,JacU,alpha,phifunwphi2,phifunwphi3,nlev)                                                    
+!      print *, "ph1 solve error:", norm2(phifunwphi3 - phifunwphitemp)                                                              
+    end if
+  end subroutine scaledsquared_phifunction_taylorseries
+
+  subroutine hevi_linear_solve(JacL,JacD,JacU,nlev,alpha,wphiin,wphiout)
+    real (kind=real_kind),intent(in) :: JacL(nlev-1), JacD(nlev), JacU(nlev-1)
+    integer, intent(in)              :: nlev
+    real (kind=real_kind),intent(in) :: alpha,wphiin(2*nlev)
+    real (kind=real_kind),intent(out) :: wphiout(2*nlev)
+    ! local variables                                                                                                                
+    real (kind=real_kind) :: wphitemp(2*nlev),wtemp(nlev),phitemp(nlev),du2(nlev-2),Tri(nlev,nlev)
+    real (kind=real_kind) :: Lcopy(nlev-1),Dcopy(nlev),Ucopy(nlev-1),rhs(nlev),temp(nlev)
+    real (kind=real_kind) :: temp2(nlev),temp3(nlev)
+    integer          :: info,k
+    integer          :: ipiv(2*nlev)
+
+    call t_startf("hevi_linear_solve")
+    Lcopy       = JacL
+    Dcopy       = JacD
+    Ucopy       = JacU
+    rhs(1:nlev) = wphiin(1:nlev)
+
+!    print *, "yoooooooooo1", rhs(:)                                                                                                 
+!    print *, "triyooooooo", Tri(:,:)                                                                                                
+ !   print *, "yoooooooooo1", rhs(1:nlev)                                                                                            
+ !   temp2(1:nlev) = rhs(1:nlev)    
+    call t_startf("hevi_linear_solve_trftrs")
+    call DGTTRF(nlev,Lcopy,Dcopy,Ucopy,du2,ipiv,info)
+    call DGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,rhs,nlev,info)
+    call t_stopf("hevi_linear_solve_trftrs")
+    ! Test the Tridiag solver                                                                                                        
+ !   Tri      = 0d0                                                                                                                  
+ !   Tri(1,1) = JacD(1)                                                                                                              
+ !   Tri(1,2) = JacU(1)                                                                                                              
+ !   do k = 2,19                                                                                                                     
+ !     Tri(k,k)   = JacD(k)                                                                                                          
+ !     Tri(k,k-1) = JacL(k-1)                                                                                                        
+ !     Tri(k,k+1) = JacU(k)                                                                                                          
+ !   end do                                                                                                                          
+ !   Tri(20,20) = JacD(20)                                                                                                           
+!   Tri(20,19) = JacL(19)                                                                                                            
+ !   temp = matmul(Tri,rhs)                                                                                                          
+ !   call DGEMM('N','N',nlev,1,nlev,1d0,Tri,nlev,rhs(1:nlev),nlev,0D0,temp,nlev)                                                     
+!   print *, "yoooooooooo2", temp(1:nlev)                                                                                            
+ !   call hevi_left_multiply(JacL,JacD,JacU,alpha,rhs,temp3,nlev)  
+ !   call tridiag_times_vector(JacL,JacD,JacU,rhs,temp3,nlev)                                                                        
+ !   print *, "yooooooooooo3", norm2(temp2-temp)                                                                                     
+ !   print *, "yoooooooooo4", norm2(temp2-temp3)                                                                                     
+    wphiout(nlev+1:2*nlev) = rhs(1:nlev)/alpha
+    wphiout(1:nlev)        = wphiin(nlev+1:2*nlev)/alpha
+    call t_stopf("hevi_linear_solve")
+  end subroutine
+
+ ! solves [beta*I + alpha*Hevi](x,y) = (wphiin)
+  subroutine hevi_linear_solve_type2(JacL,JacD,JacU,nlev,alpha,beta,wphiin,wphiout)
+    complex(kind=8),intent(in) :: JacL(nlev-1), JacD(nlev), JacU(nlev-1)
+    complex(kind=8),intent(in) :: alpha,beta,wphiin(2*nlev)
+    complex(kind=8),intent(inout) ::wphiout(2*nlev)
+    integer, intent(in)              :: nlev
+    ! local variables                                                      
+    complex(kind=8) :: Lcopy(nlev-1),Dcopy(nlev),Ucopy(nlev-1),rhs(nlev),du2(nlev-2)
+    real (kind=real_kind) :: temp2(nlev),temp3(nlev)
+    integer          :: info,k
+    integer          :: ipiv(2*nlev)
+    call t_startf("hevi_linear_solve_type2")
+    do k = 1,nlev-1
+      Lcopy(k) = JacL(k)*alpha
+      Dcopy(k) = JacD(k)*alpha + beta
+      Ucopy(k) = JacU(k)*alpha
+      rhs(k)   = -(alpha/beta)*wphiin(k) + wphiin(nlev+k)
+    end do
+    Dcopy(nlev) = JacD(nlev)*alpha + beta
+    rhs(nlev)   = -(alpha/beta)*wphiin(nlev) + wphiin(2*nlev)
+
+    call t_startf("hevi_linear_solve_trftrs")
+    call ZGTTRF(nlev,Lcopy,Dcopy,Ucopy,du2,ipiv,info)
+    call ZGTTRS('N',nlev,1,Lcopy,Dcopy,Ucopy,du2,ipiv,rhs,nlev,info)
+    call t_stopf("hevi_linear_solve_trftrs")                                                                                    
+    ! x = betaa^-1 rhs1 - betaa^-1 alphaa T y 
+    wphiout(nlev+1:2*nlev) = rhs(1:nlev)
+    do k =2,nlev-1
+      wphiout(k) = wphiin(k)/beta - (alpha/beta)*(JacL(k-1)*rhs(k-1) + JacD(k)*rhs(k) + JacU(k)*rhs(k+1))              
+    end do                                                                                                                                          
+    wphiout(1)    = wphiin(1)/beta - (alpha/beta)*(JacD(1)*rhs(1) + JacU(1)*rhs(2))                                                                  
+    wphiout(nlev) = wphiin(nlev)/beta - (alpha/beta)*(JacL(nlev-1)*rhs(nlev-1) + JacD(nlev)*rhs(nlev))   
+    call t_stopf("hevi_linear_solve_type2")
+  end subroutine hevi_linear_solve_type2
+
+
+
+  subroutine hevi_left_multiply(TriL,TriD,TriU,alpha,vecin,vecout,dim)
+    integer, intent(in)                  :: dim
+    real (kind = real_kind), intent(in)  :: TriL(dim-1),TriD(dim),TriU(dim-1),alpha
+    real (kind = real_kind), intent(in)  :: vecin(2*dim)
+    real (kind = real_kind), intent(out) :: vecout(2*dim)
+    ! local variables                                                                                                                
+    integer :: k
+    call t_startf("hevi_left_multiply")
+    vecout(dim+1:2*dim) = alpha * vecin(1:dim)
+
+    call tridiag_times_vector(TriL,TriD,TriU,alpha*vecin(dim+1:2*dim),vecout(1:dim),dim)
+!    do k =2,dim-1                                                                                                                   
+!      vecout(k) = alpha*(TriL(k-1)*vecin(dim+k-1) + TriD(k)*vecin(dim+k) + TriU(k)*vecin(dim+k+1))                                  
+!@    end do                                                                                                                         
+!    vecout(1)    = alpha*(TriD(1)*vecin(dim+1) + TriU(1)*vecin(dim+2))                                                              
+!    vecout(nlev) = alpha*(TriL(nlev-1)*vecin(2*dim-1) + TriD(nlev)*vecin(2*dim))                                                    
+    call t_stopf("hevi_left_multiply")
+  end subroutine hevi_left_multiply
+
+  subroutine phifunction_taylorseries(JacL,JacD,JacU,nlev,alpha,wphi,expJwphi,tsorder,phiorder)
+    real (kind=real_kind), dimension(:), intent(in) :: JacL, JacD, JacU
+    integer, intent(in) :: nlev,tsorder,phiorder
+    real (kind=real_kind), intent(in) :: alpha ! usually alpha = g*dt                                                                
+    real (kind=real_kind), dimension(:), intent(in) :: wphi(2*nlev) 
+    real (kind=real_kind), dimension(:), intent(inout) :: expJwphi(2*nlev) 
+    ! local variables                                                                                                                
+    real (kind=real_kind)               :: coeffs(10)
+    real (kind=real_kind), dimension(:) :: expJwphitemp(2*nlev),expJwphitemp2(2*nlev)
+
+    call t_startf("ts")
+    if (phiorder.eq.(0)) then
+      coeffs(1) = 1d0
+      coeffs(2) = 1d0
+      coeffs(3) = 1d0/2d0
+      coeffs(4) = 1d0/6d0
+      coeffs(5) = 1d0/24d0
+      coeffs(6) = 1d0/120d0
+      coeffs(7) = 1d0/720d0
+      coeffs(8) = 1d0/5040d0
+      coeffs(9) = 1d0/40320d0
+      coeffs(10) = 1d0/362880d0
+      call hevi_horners_method(JacL,JacD,JacU,alpha,wphi,expJwphi,nlev,tsorder-1,coeffs(1:tsorder))
+    elseif (phiorder.eq.(1)) then
+      coeffs(1) = 1d0
+      coeffs(2) = 1d0/2d0
+      coeffs(3) = 1d0/6d0
+      coeffs(4) = 1d0/24d0
+      coeffs(5) = 1d0/120d0
+      coeffs(6) = 1d0/720d0
+      coeffs(7) = 1d0/5040d0
+      coeffs(8) = 1d0/40320d0
+      coeffs(9) = 1d0/362880d0
+      call hevi_horners_method(JacL,JacD,JacU,alpha,wphi,expJwphi,nlev,tsorder-1,coeffs(1:tsorder))
+    elseif (phiorder.eq.(2)) then
+      coeffs(1) = 1d0/2d0
+      coeffs(2) = 1d0/6d0
+      coeffs(3) = 1d0/24d0
+      coeffs(4) = 1d0/120d0
+      coeffs(5) = 1d0/720d0
+      coeffs(6) = 1d0/5040d0
+      coeffs(7) = 1d0/40320d0
+      coeffs(8) = 1d0/362880d0
+      coeffs(9) = 1d0/3628800d0
+      call hevi_horners_method(JacL,JacD,JacU,alpha,wphi,expJwphi,nlev,tsorder-1,coeffs(1:tsorder))
+    elseif (phiorder.eq.(3)) then
+      coeffs(1) = 1d0/6d0
+      coeffs(2) = 1d0/24d0
+      coeffs(3) = 1d0/120d0
+      coeffs(4) = 1d0/720d0
+      coeffs(5) = 1d0/5040d0
+      coeffs(6) = 1d0/403220d0
+      coeffs(7) = 1d0/362880d0
+      coeffs(8) = 1d0/3628800d0
+      call hevi_horners_method(JacL,JacD,JacU,alpha,wphi,expJwphi,nlev,tsorder-1,coeffs(1:tsorder))
+    endif
+    call t_stopf("ts")
+  end subroutine phifunction_taylorseries
+
+  subroutine tridiag_times_vector(TriL,TriD,TriU,vecin,vecout,dim)
+    integer, intent(in)                  :: dim
+    real (kind = real_kind), intent(in)  :: TriL(dim-1),TriD(dim),TriU(dim-1),vecin(dim)
+    real (kind = real_kind), intent(out) :: vecout(dim)
+    ! local variables                                                                                                                 
+    integer :: k
+    real (kind = real_kind) :: vectemp(dim)
+    do k = 2,dim-1
+      vectemp(k) = TriL(k-1)*vecin(k-1) + TriD(k)*vecin(k) &
+        + TriU(k)*vecin(k+1)
+    end do
+    vectemp(1)   = TriD(1)*vecin(1)+TriU(1)*vecin(2)
+    vectemp(dim) = TriL(dim-1)*vecin(dim-1) + TriD(dim)*vecin(dim)
+    vecout       = vectemp
+  end subroutine tridiag_times_vector
+
+  subroutine hevi_horners_method(TriL,TriD,TriU,alpha,vecin,vecout,dim,order,coeffs)
+    integer, intent(in)                               :: dim,order
+    real (kind = real_kind),dimension(:), intent(in)  :: TriL(dim-1),TriD(dim),TriU(dim-1)
+    real (kind = real_kind), intent(in)               :: alpha
+    real (kind = real_kind),dimension(:), intent(in)  :: vecin(2*dim),coeffs(order+1)
+    real (kind = real_kind),dimension(:), intent(out) :: vecout(2*dim)
+    ! local variables                                                                                                                 
+    integer :: k
+    real (kind = real_kind), dimension(:) :: vecouttemp(2*dim)
+    call t_startf("hevi_horners_method")
+    ! this loop computes p(hevi matrix)*v where p(J) = coeff(1)+coeff(2)*J + ...                                                      
+    vecouttemp = 0d0
+    vecout     = coeffs(order+1)*vecin
+    do k = 0,order-1
+      ! compute Tri p(A)_prev vecin and write to vecout                                                                               
+      call hevi_left_multiply(TriL,TriD,TriU,alpha,vecout,vecouttemp,dim)
+      vecout = coeffs(order-k)*vecin + vecouttemp
+    end do
+    call t_stopf("hevi_horners_method")
+  end subroutine hevi_horners_method
+
+  subroutine get_Nwphi(JacL,JacD,JacU,alpha,nlev,p,coeffs,wphiin,wphiout)
+    real (kind=real_kind), dimension(:), intent(in) :: JacL(:), JacD(:), JacU(:)
+    integer, intent(in)                 :: nlev,p
+    complex(kind=8),intent(in)    :: alpha,wphiin(2*nlev)
+    complex(kind=8),intent(in)          :: coeffs(p)
+    complex(kind=8),intent(inout) :: wphiout(2*nlev)
+
+    integer :: j,k
+    complex(kind=8) :: cwphi(2*nlev),cwphiout(2*nlev)
+
+    cwphiout = wphiin
+    do j = 1,p
+      do k = 2,nlev-1
+        cwphi(k) = (JacL(k-1)*cwphiout(nlev+k-1) +JacD(k)*cwphiout(nlev+k) &
+          + JacU(k)*cwphiout(nlev+k+1))*alpha - coeffs(j)*cwphiout(k)
+      end do
+      cwphi(1)    = (JacD(1)*cwphiout(nlev+1)+JacU(1)*cwphiout(nlev+2))*alpha - &
+                        coeffs(j)*cwphiout(1)
+      cwphi(nlev) = (JacL(nlev-1)*cwphiout(nlev+nlev-1) + &
+                        JacD(nlev)*cwphiout(nlev+nlev))*alpha - coeffs(j)*cwphiout(nlev)
+      cwphi(nlev+1:2*nlev) = alpha*cwphiout(1:nlev) - coeffs(j)*cwphiout(nlev+1:2*nlev)
+      cwphiout = cwphi
+    end do
+  end subroutine get_Nwphi
+
+! ==============================================================================                                                                      
+  subroutine get_Dinvwphi(JacL,JacD,JacU,alpha,nlev,q,zeros,wphiin,wphiout)
+    real (kind=real_kind), dimension(:), intent(in) :: JacL(:), JacD(:), JacU(:)
+    integer, intent(in)                 :: nlev,q
+    complex(kind=8),intent(in)    :: alpha,wphiin(2*nlev)
+    complex(kind=8),intent(in)          :: zeros(q)
+    complex(kind=8),intent(inout) :: wphiout(2*nlev)
+    ! local variables                                                                                                                                 
+    integer :: j,k
+    complex(kind=8) :: cwphi(2*nlev), cwphi2(2*nlev), calpha
+    call t_startf("get_DinvNphi")
+!    calpha   = dcmplx(alpha,0d0)
+!    cwphi(:) = dcmplx(wphiin(:),0d0)
+    do j = 1,q
+      call  hevi_linear_solve_type2(dcmplx(JacL),dcmplx(JacD),dcmplx(JacU),nlev,dcmplx(alpha),zeros(q),cwphi,wphiout)     
+      cwphi = wphiout
+    end do
+    call t_stopf("get_DinvNphi")
+  end subroutine
+
+  subroutine get_DinvNwphi(JacL,JacD,JacU,alpha,nlev,p,q,coeffsN,zerosD,wphiin,wphiout)
+    real (kind=real_kind), dimension(:), intent(in) :: JacL(:), JacD(:), JacU(:)
+    integer, intent(in)                     :: nlev,q,p
+    complex(kind=8),intent(in)        :: alpha,wphiin(2*nlev)
+    complex(kind=8),dimension(:),intent(in) :: coeffsN(:),zerosD(:)
+    complex(kind=8),intent(inout) :: wphiout(2*nlev)
+
+    complex(kind=8) :: wphiouttemp(2*nlev)  
+
+    call t_startf("get_DinvNwphi_imp")
+    if (q.gt.0) then
+      call get_Dinvwphi(JacL,JacD,JacU,dcmplx(alpha),nlev,q,zerosD,wphiin,wphiout)
+    else
+      wphiout = wphiin
+    end if
+    call t_stopf("get_DinvNwphi_imp")
+
+    wphiouttemp = wphiout
+    call t_startf("get_DinvNwphi_exp")
+    if (p.gt.0) then
+      call get_Nwphi(JacL,JacD,JacU,dcmplx(alpha),nlev,p,coeffsN,wphiouttemp,wphiout)
+    end if
+    call t_stopf("get_DinvNwphi_exp")
+
+  end subroutine get_DinvNwphi
 
 end module exp_mod

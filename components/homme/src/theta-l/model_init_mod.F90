@@ -381,8 +381,10 @@ contains
   do ie = nets,nete
     do i = 1,np
       do j = 1,np
-        call tri_inv(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),triInv)
-        call tri_mult(JacL_elem(:,i,j,ie),JacD_elem(:,i,j,ie),JacU_elem(:,i,j,ie),dcmplx(triInv),tri_prod,nlev)
+        call tri_inv((JacL_elem(:,i,j,ie)),(JacD_elem(:,i,j,ie)),&
+          (JacU_elem(:,i,j,ie)),triInv)
+        call tri_mult(dcmplx(JacL_elem(:,i,j,ie)),dcmplx(JacD_elem(:,i,j,ie)),&
+          dcmplx(JacU_elem(:,i,j,ie)),dcmplx(triInv),tri_prod,nlev)
         do k = 1,nlev
           tri_prod(k,k) = tri_prod(k,k) - 1.d0
         end do
